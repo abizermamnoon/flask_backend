@@ -6,6 +6,8 @@ import json
 import os
 import datetime
 import csv
+import dask.dataframe as dd
+from multiprocessing import dummy
 import pandas as pd
 
 app = Flask(__name__)
@@ -27,21 +29,24 @@ def upload():
     uploadedFileName = myFile.filename
     uploadedFileType = myFile.content_type
 
+    myFile.save(f"./public/{myFile.filename}")
+
+    filePath = f"./public/{myFile.filename}"
+
     if uploadedFileType == "application/json":
         print('Uploaded File Type:', uploadedFileType)
-        df = pd.read_json(myFile)
+        df = pd.read_json(filePath)
         
     elif uploadedFileType == "text/csv":
         print('Uploaded File Type:', uploadedFileType)
-        df = pd.read_csv(myFile)
+        df = pd.read_csv(filePath)
 
     elif uploadedFileType == "application/octet-stream" and myFile.filename.endswith(".parquet"):
-        print('Uploaded File Type:', uploadedFileType)
-        df = pd.read_parquet(myFile)
+        print('Uploaded File Type:', uploadedFileType)  
+        df = pd.read_parquet(filePath)
         df["datetime"] = df["datetime"].astype(str)
-        
-
-
+    
+    df = dd.from_pandas(df, npartitions = 3 * core)     
     # Slice the first 10 rows and save it as '10_rows.json'
     slicedData = df.head(10)
     slicedDataFilePath = "./public/10_rows.json"
@@ -89,14 +94,14 @@ def sort_data():
     sortedData = {}
 
     if type == "pie":
-        groupedData = df.groupby(yAxisParams).size().reset_index(name='count')
-        groupedData = groupedData.sort_values('count', ascending=False)
-        print('groupedData:', groupedData)
+        groupedData = df.groupby(yAxisParams).size().reset_index().compute()
         sortedData = {
             "xAxisData": [''.join(map(str, group)) for group in groupedData[yAxisParams].values],
-            "yAxisData": groupedData['count'].values.tolist()
+            "yAxisData": groupedData[0].values.tolist()
         }
-        print('sorted data:', sortedData)
+        sortedData["xAxisData"], sortedData["yAxisData"] = zip(*sorted(zip(sortedData["xAxisData"], sortedData["yAxisData"]), key=lambda x: x[1], reverse=True))
+
+        print('final sorted data:', sortedData)
     else:
         print("type:", type)
         groupedData = {}
@@ -130,4 +135,6 @@ def sort_data():
     return sortedData, 200
 
 if __name__ == "__main__":
+    core = os.cpu_count()
+    print('core:', core)
     app.run(port=5000)
