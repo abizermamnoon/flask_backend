@@ -133,10 +133,11 @@ def sort_data():
                 
 
             if groupKey not in groupedData:
-                groupedData[groupKey] = {yAxisParam: 0 for yAxisParam in yAxisParams}
+                groupedData[groupKey] = {yAxisParam: None for yAxisParam in yAxisParams}
 
             for yAxisParam in yAxisParams:
-                groupedData[groupKey][yAxisParam] += int(entry[yAxisParam])
+                if groupedData[groupKey][yAxisParam] is None:
+                    groupedData[groupKey][yAxisParam] = int(entry[yAxisParam])
 
         sortedData = {
             "xAxisData": sorted(groupedData.keys()),  # Sort the keys
