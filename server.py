@@ -1,5 +1,6 @@
 from flask import Flask, request, send_file, make_response
 from flask_cors import CORS
+import pyarrow as pa
 import zlib
 import json
 import os
@@ -12,7 +13,7 @@ CORS(app)
 
 uploadedFileName = None
 uploadedFileType = None
-streamedData = []
+df = None
 
 @app.route("/upload", methods=["POST"])
 def upload():
@@ -21,36 +22,30 @@ def upload():
 
     myFile = request.files["file"]
 
-    global uploadedFileName, uploadedFileType, streamedData
+    global uploadedFileName, uploadedFileType, df
 
     uploadedFileName = myFile.filename
     uploadedFileType = myFile.content_type
 
-
-    myFile.save(f"./public/{myFile.filename}")
-
-    filePath = f"./public/{myFile.filename}"
-
     if uploadedFileType == "application/json":
         print('Uploaded File Type:', uploadedFileType)
-        with open(filePath, "r") as file:
-            streamedData = json.load(file)
+        df = pd.read_json(myFile)
+        
     elif uploadedFileType == "text/csv":
         print('Uploaded File Type:', uploadedFileType)
-        with open(filePath, "r") as file:
-            csv_reader = csv.DictReader(file)
-            streamedData = [row for row in csv_reader]
+        df = pd.read_csv(myFile)
+
     elif uploadedFileType == "application/octet-stream" and myFile.filename.endswith(".parquet"):
         print('Uploaded File Type:', uploadedFileType)
-        df = pd.read_parquet(filePath)
+        df = pd.read_parquet(myFile)
         df["datetime"] = df["datetime"].astype(str)
-        streamedData = df.to_dict(orient="records")
+        
+
 
     # Slice the first 10 rows and save it as '10_rows.json'
-    slicedData = streamedData[:10]
+    slicedData = df.head(10)
     slicedDataFilePath = "./public/10_rows.json"
-    with open(slicedDataFilePath, "w") as slicedFile:
-        json.dump(slicedData, slicedFile)
+    slicedData.to_json(slicedDataFilePath, orient="records")
 
     return {
         "file": myFile.filename,
@@ -67,11 +62,7 @@ def index():
     headers = {}
 
     # Set the appropriate response headers for the compressed content
-    
-    if uploadedFileType == "application/json":
-        headers["Content-Type"] = "application/json"
-    elif uploadedFileType == "text/csv":
-        headers["Content-Type"] = "text/csv"
+    headers["Content-Type"] = "application/json"
 
     response = make_response(send_file(filePath))
     # print('len(response):', len(response))
@@ -81,8 +72,8 @@ def index():
 
 @app.route("/sortData", methods=["POST"])
 def sort_data():
-    global streamedData
-    print('Streamed Data Length in Sort:', len(streamedData))
+    global df
+    print('Streamed Data Length in Sort:', len(df))
 
     data = request.json
 
@@ -98,25 +89,18 @@ def sort_data():
     sortedData = {}
 
     if type == "pie":
-        print("type:", type)
-        groupedData = {}
-        for entry in streamedData:
-            groupKey = tuple(entry[yAxisParam] for yAxisParam in yAxisParams)
-            
-            if groupKey not in groupedData:
-                groupedData[groupKey] = {yAxisParam: 0 for yAxisParam in yAxisParams}
-
-            for yAxisParam in yAxisParams:
-                groupedData[groupKey][yAxisParam] += 1
-
+        groupedData = df.groupby(yAxisParams).size().reset_index(name='count')
+        groupedData = groupedData.sort_values('count', ascending=False)
+        print('groupedData:', groupedData)
         sortedData = {
-            "xAxisData": ["".join(groupKey) for groupKey in sorted(groupedData.keys(), key=lambda k: groupedData[k][yAxisParams[0]], reverse=True)],
-            "yAxisData": [[groupedData[key][yAxisParam] for yAxisParam in yAxisParams] for key in sorted(groupedData.keys(), key=lambda k: groupedData[k][yAxisParams[0]], reverse=True)]
+            "xAxisData": [''.join(map(str, group)) for group in groupedData[yAxisParams].values],
+            "yAxisData": groupedData['count'].values.tolist()
         }
+        print('sorted data:', sortedData)
     else:
-        groupedData = {}
         print("type:", type)
-        for entry in streamedData:
+        groupedData = {}
+        for _, entry in df.iterrows():
             groupKey = entry[xAxisParam]
 
             if xAxisParam == "datetime" and interval == "daily":
