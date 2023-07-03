@@ -23,7 +23,7 @@ def upload():
 
     myFile = request.files["file"]
 
-    global uploadedFileName, uploadedFileType, df, grouped_monthly, grouped_yearly, grouped_daily
+    global uploadedFileName, uploadedFileType, df, grouped_monthly, grouped_yearly, grouped_daily, grouped_data
 
     uploadedFileName = myFile.filename
     uploadedFileType = myFile.content_type
@@ -34,6 +34,7 @@ def upload():
         df['datetime'] = pd.to_datetime(df['datetime'])
         
     elif uploadedFileType == "text/csv":
+        start_time = time.time()
         print('Uploaded File Type:', uploadedFileType)
         df = pd.read_csv(myFile)
         df['datetime'] = pd.to_datetime(df['datetime'])
@@ -47,6 +48,11 @@ def upload():
         df = pd.read_parquet(myFile)
         df["datetime"] = df["datetime"].astype(str)
         df['datetime'] = pd.to_datetime(df['datetime'])
+
+    # Perform groupby operations immediately after uploading the file for all columns
+    grouped_data = {}
+    for column in df.columns:
+        grouped_data[column] = df.groupby(column)
     
     # Perform groupby operations immediately after uploading the file
     grouped_monthly = group_by_monthly()
@@ -57,6 +63,10 @@ def upload():
     slicedData = df.head(5)
     slicedDataFilePath = "./public/10_rows.json"
     slicedData.to_json(slicedDataFilePath, orient="records")
+
+    end_time = time.time()
+    execution_time = end_time - start_time
+    print("Execution time:", execution_time, "seconds")
 
     return {
         "file": myFile.filename,
@@ -97,7 +107,7 @@ def index():
 @app.route("/sortData", methods=["POST"])
 def sort_data():
     start_time = time.time()
-    global df, grouped_monthly, grouped_daily, grouped_yearly
+    global df, grouped_monthly, grouped_daily, grouped_yearly, grouped_data
     print('Streamed Data Length in Sort:', len(df))
 
     data = request.json
@@ -125,10 +135,10 @@ def sort_data():
         execution_time = end_time - start_time
         print("Execution time:", execution_time, "seconds")
     else:
-        print("type:", type)
         groupedData = {}
+        print("type:", type)
         if xAxisParam != "datetime":
-            grouped = df.groupby(xAxisParam)
+            grouped = grouped_data[xAxisParam]
             for groupKey, group in grouped:
                 first_values = group.head(1)
                 for _, entry in first_values.iterrows():
