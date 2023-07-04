@@ -1,5 +1,6 @@
-from flask import Flask, request, send_file, make_response
+from flask import Flask, request, send_file, make_response, Response, jsonify
 from flask_cors import CORS
+from io import StringIO
 import pyarrow as pa
 import zlib
 import json
@@ -15,6 +16,7 @@ CORS(app)
 uploadedFileName = None
 uploadedFileType = None
 df = None
+state = {}
 
 @app.route("/upload", methods=["POST"])
 def upload():
@@ -161,6 +163,25 @@ def sort_data():
         
     
     return sortedData, 200
+
+@app.route('/create', methods=["POST"])
+def createFrame():
+    data = StringIO(request.json["data"], '\r')
+    state["frame"] = pd.read_csv(data, engine="python")
+    formatFrame()
+    print("Frame created")
+    return jsonify(formatFrame())
+
+
+def formatFrame():
+    frame_rep = dict()
+    frame_rep["columns"] = [{
+        "Header": x,
+        "accessor": x
+    } for x in state["frame"]]
+    frame_rep["data"] = json.loads(state["frame"].to_json(orient="records"))
+    print("Frame formatted")
+    return frame_rep
 
 if __name__ == "__main__":
     app.run(port=5000)
