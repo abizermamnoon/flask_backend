@@ -17,6 +17,12 @@ uploadedFileName = None
 uploadedFileType = None
 df = None
 state = {}
+state = {
+    "frame": None
+}
+frame_rep = {} 
+response = {}
+column = None
 
 @app.route("/upload", methods=["POST"])
 def upload():
@@ -25,7 +31,7 @@ def upload():
 
     myFile = request.files["file"]
 
-    global uploadedFileName, uploadedFileType, df, grouped_monthly, grouped_yearly, grouped_daily
+    global uploadedFileName, uploadedFileType, df, grouped_monthly, grouped_yearly, grouped_daily, state, frame_rep, response, grouped_data
 
     uploadedFileName = myFile.filename
     uploadedFileType = myFile.content_type
@@ -36,6 +42,7 @@ def upload():
         df['datetime'] = pd.to_datetime(df['datetime'])
         
     elif uploadedFileType == "text/csv":
+        start_time = time.time()
         print('Uploaded File Type:', uploadedFileType)
         df = pd.read_csv(myFile)
         df['datetime'] = pd.to_datetime(df['datetime'])
@@ -43,6 +50,9 @@ def upload():
             print("Pandas DataFrame has been created.")
         else:
             print("Error: Failed to create Pandas DataFrame from CSV.")
+        state["frame"] = df.head(1000)
+        frame_rep = formatFrame()
+        response = jsonify(frame_rep)
 
     elif uploadedFileType == "application/octet-stream" and myFile.filename.endswith(".parquet"):
         print('Uploaded File Type:', uploadedFileType)
@@ -50,6 +60,11 @@ def upload():
         df["datetime"] = df["datetime"].astype(str)
         df['datetime'] = pd.to_datetime(df['datetime'])
     
+    # Perform groupby operations immediately after uploading the file for all columns
+    grouped_data = {}
+    for column in df.columns:
+        grouped_data[column] = df.groupby(column)
+
     # Perform groupby operations immediately after uploading the file
     grouped_monthly = group_by_monthly()
     grouped_yearly = group_by_yearly()
@@ -59,6 +74,10 @@ def upload():
     slicedData = df.head(5)
     slicedDataFilePath = "./public/10_rows.json"
     slicedData.to_json(slicedDataFilePath, orient="records")
+
+    end_time = time.time()
+    execution_time = end_time - start_time
+    print("Execution time:", execution_time, "seconds")
 
     return {
         "file": myFile.filename,
@@ -77,6 +96,24 @@ def group_by_yearly():
 def group_by_daily():
     global df
     return df.groupby(df['datetime'].dt.strftime('%Y-%m-%d'))
+
+def formatFrame():
+    frame_rep = dict()
+    frame_rep["columns"] = [{
+        "Header": column,
+        "accessor": column
+    } for column in state["frame"].columns]
+    frame_rep["data"] = []
+    for _, row in state["frame"].iterrows():
+        formatted_row = {}
+        for column, value in row.items():
+            if isinstance(value, pd.Timestamp):
+                formatted_row[column] = value.strftime("%Y-%m-%d %H:%M:%S")
+            else:
+                formatted_row[column] = value
+        frame_rep["data"].append(formatted_row)
+    print("Frame formatted")
+    return frame_rep
 
 
 @app.route("/")
@@ -99,7 +136,7 @@ def index():
 @app.route("/sortData", methods=["POST"])
 def sort_data():
     start_time = time.time()
-    global df, grouped_monthly, grouped_daily, grouped_yearly
+    global df, grouped_monthly, grouped_daily, grouped_yearly, grouped_data
     print('Streamed Data Length in Sort:', len(df))
 
     data = request.json
@@ -130,7 +167,7 @@ def sort_data():
         print("type:", type)
         groupedData = {}
         if xAxisParam != "datetime":
-            grouped = df.groupby(xAxisParam)
+            grouped = grouped_data[xAxisParam]
             for groupKey, group in grouped:
                 first_values = group.head(1)
                 for _, entry in first_values.iterrows():
@@ -166,22 +203,48 @@ def sort_data():
 
 @app.route('/create', methods=["POST"])
 def createFrame():
-    data = StringIO(request.json["data"], '\r')
-    state["frame"] = pd.read_csv(data, engine="python")
-    formatFrame()
+    global response
+    
     print("Frame created")
-    return jsonify(formatFrame())
+    return response
 
+@app.route('/get_groups', methods=["POST"])
+def findGroups():
+    global grouped_data, column
+    data = request.json
 
-def formatFrame():
-    frame_rep = dict()
-    frame_rep["columns"] = [{
-        "Header": x,
-        "accessor": x
-    } for x in state["frame"]]
-    frame_rep["data"] = json.loads(state["frame"].to_json(orient="records"))
-    print("Frame formatted")
-    return frame_rep
+    column = data["column"]
+
+    if column in grouped_data:
+        groups = list(grouped_data[column].groups.keys())
+        return jsonify(groups)
+    else:
+        return jsonify([])  # Return an empty list if the column is not found
+    
+@app.route('/filter', methods=["POST"])
+def findFilter():
+    global df, column
+    data = request.json
+
+    group = data["group"]
+
+    if group:
+        filtered_df = df[df[column] == group]
+        print('First 5 rows of filtered dataframe:', filtered_df['datetime'].head(5))
+    else:
+        filtered_df = df
+
+    # Convert the datetime column to string format
+    if 'datetime' in filtered_df.columns:
+        filtered_df['datetime'] = filtered_df['datetime'].dt.strftime("%Y-%m-%d %H:%M:%S")
+
+    # Convert the filtered DataFrame to the response format
+    response = {
+        "columns": filtered_df.columns.tolist(),
+        "data": filtered_df.head(1000).to_dict(orient="records")
+    }
+
+    return jsonify(response)
 
 if __name__ == "__main__":
     app.run(port=5000)
