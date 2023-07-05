@@ -226,11 +226,16 @@ def findFilter():
     global df, column
     data = request.json
 
-    group = data["group"]
+    groups = data["group"]
+    print('groups:', groups)
 
-    if group:
-        filtered_df = df[df[column] == group]
-        print('First 5 rows of filtered dataframe:', filtered_df['datetime'].head(5))
+    if groups:
+        filtered_df = pd.DataFrame()  # Create an empty DataFrame for storing the filtered results
+        for group in groups:
+            temp_df = df[df[column] == group]  # Filter the DataFrame for each group
+            filtered_df = filtered_df.append(temp_df)  # Append the filtered results to the main DataFrame
+        print('First 5 rows of filtered dataframe:', filtered_df.head(5))
+        print('Last 5 rows of filtered dataframe:', filtered_df.tail(5))
     else:
         filtered_df = df
 
