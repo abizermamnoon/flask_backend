@@ -9,6 +9,7 @@ import datetime
 import csv
 import pandas as pd
 import time
+import numpy as np
 
 app = Flask(__name__)
 CORS(app)
@@ -23,6 +24,9 @@ state = {
 frame_rep = {} 
 response = {}
 column = None
+converted_columns = []
+grouped_data = {}
+data_types = {}
 
 @app.route("/upload", methods=["POST"])
 def upload():
@@ -31,7 +35,7 @@ def upload():
 
     myFile = request.files["file"]
 
-    global uploadedFileName, uploadedFileType, df, grouped_monthly, grouped_yearly, grouped_daily, state, frame_rep, response, grouped_data
+    global uploadedFileName, uploadedFileType, df, grouped_monthly, grouped_yearly, grouped_daily, state, frame_rep, response, grouped_data, data_types
 
     uploadedFileName = myFile.filename
     uploadedFileType = myFile.content_type
@@ -39,13 +43,14 @@ def upload():
     if uploadedFileType == "application/json":
         print('Uploaded File Type:', uploadedFileType)
         df = pd.read_json(myFile)
-        df['datetime'] = pd.to_datetime(df['datetime'])
+        df = convert_datetime_columns(df)
         
     elif uploadedFileType == "text/csv":
         start_time = time.time()
         print('Uploaded File Type:', uploadedFileType)
         df = pd.read_csv(myFile)
-        df['datetime'] = pd.to_datetime(df['datetime'])
+        df = convert_datetime_columns(df)
+        # df['datetime'] = pd.to_datetime(df['datetime'])
         if isinstance(df, pd.DataFrame):
             print("Pandas DataFrame has been created.")
         else:
@@ -57,15 +62,13 @@ def upload():
     elif uploadedFileType == "application/octet-stream" and myFile.filename.endswith(".parquet"):
         print('Uploaded File Type:', uploadedFileType)
         df = pd.read_parquet(myFile)
-        df["datetime"] = df["datetime"].astype(str)
-        df['datetime'] = pd.to_datetime(df['datetime'])
-    
+        df = convert_datetime_columns(df)
+
     # Perform groupby operations immediately after uploading the file for all columns
-    grouped_data = {}
+    
     for column in df.columns:
         grouped_data[column] = df.groupby(column)
 
-    # Perform groupby operations immediately after uploading the file
     grouped_monthly = group_by_monthly()
     grouped_yearly = group_by_yearly()
     grouped_daily = group_by_daily()
@@ -85,17 +88,48 @@ def upload():
         "ty": myFile.content_type
     }
 
+def convert_datetime_columns(df):
+    datetime_columns = df.select_dtypes(include=[object]).columns
+    global converted_columns
+    # print('datetime_columns:', datetime_columns)
+    for column in datetime_columns:
+        try:
+            df[column] = pd.to_datetime(df[column], format='%Y-%m-%d %H:%M:%S')
+            converted_columns.append(column)
+        except ValueError:
+            pass
+    print('datetime_columns:', converted_columns)
+    return df
+
 def group_by_monthly():
-    global df
-    return df.groupby(df['datetime'].dt.strftime('%Y-%m'))
+    global df, converted_columns
+    if len(converted_columns) > 0:
+        grouped_monthly_data = {}
+        for column in converted_columns:
+            grouped_monthly_data[column] = df.groupby(df[column].dt.strftime('%Y-%m'))
+        return grouped_monthly_data
+    else:
+        return None
 
 def group_by_yearly():
-    global df
-    return df.groupby(df['datetime'].dt.strftime('%Y'))
+    global df, converted_columns
+    if len(converted_columns) > 0:
+        grouped_yearly_data = {}
+        for column in converted_columns:
+            grouped_yearly_data[column] = df.groupby(df[column].dt.strftime('%Y'))
+        return grouped_yearly_data
+    else:
+        return None
 
 def group_by_daily():
-    global df
-    return df.groupby(df['datetime'].dt.strftime('%Y-%m-%d'))
+    global df, converted_columns
+    if len(converted_columns) > 0:
+        grouped_daily_data = {}
+        for column in converted_columns:
+            grouped_daily_data[column] = df.groupby(df[column].dt.strftime('%Y-%m-%d'))
+        return grouped_daily_data
+    else:
+        return None
 
 def formatFrame():
     frame_rep = dict()
@@ -115,9 +149,9 @@ def formatFrame():
     print("Frame formatted")
     return frame_rep
 
-
 @app.route("/")
 def index():
+    
     if not uploadedFileName:
         return {"msg": "No file has been uploaded"}, 400
 
@@ -126,17 +160,34 @@ def index():
 
     # Set the appropriate response headers for the compressed content
     headers["Content-Type"] = "application/json"
-
+    
     response = make_response(send_file(filePath))
-    # print('len(response):', len(response))
     response.headers = headers
 
     return response
 
+@app.route("/coltype", methods=["POST"])
+def findColType():
+    global df
+    dtypes_dict = df.dtypes.apply(lambda x: map_dtype_name(x)).to_dict()
+    return jsonify(dtypes_dict)
+
+def map_dtype_name(dtype):
+    if np.issubdtype(dtype, np.integer):
+        return "int"
+    elif np.issubdtype(dtype, np.floating):
+        return "float"
+    elif np.issubdtype(dtype, np.object_):
+        return "string"
+    elif np.issubdtype(dtype, np.datetime64):
+        return "datetime"
+    else:
+        return str(dtype)
+
 @app.route("/sortData", methods=["POST"])
 def sort_data():
     start_time = time.time()
-    global df, grouped_monthly, grouped_daily, grouped_yearly, grouped_data
+    global df, grouped_monthly, grouped_daily, grouped_yearly, grouped_data, converted_columns
     print('Streamed Data Length in Sort:', len(df))
 
     data = request.json
@@ -164,31 +215,27 @@ def sort_data():
         execution_time = end_time - start_time
         print("Execution time:", execution_time, "seconds")
     else:
-        print("type:", type)
         groupedData = {}
-        if xAxisParam != "datetime":
+        if xAxisParam not in converted_columns:
             grouped = grouped_data[xAxisParam]
-            for groupKey, group in grouped:
-                first_values = group.head(1)
-                for _, entry in first_values.iterrows():
-                    groupedData[groupKey] = {yAxisParam: entry[yAxisParam] for yAxisParam in yAxisParams}
+            
         else:
             if interval == "daily":
                 # df['datetime'] = pd.to_datetime(df['datetime'])
-                grouped = grouped_daily
+                grouped = grouped_daily[xAxisParam]
             elif interval == "monthly":
                 # df['datetime'] = pd.to_datetime(df['datetime'])
-                grouped = grouped_monthly
+                grouped = grouped_monthly[xAxisParam]
             elif interval == "yearly":
                 # df['datetime'] = pd.to_datetime(df['datetime'])
-                grouped = grouped_yearly
+                grouped = grouped_yearly[xAxisParam]
             else:
                 return {"msg": "Invalid interval"}, 400
             
-            for groupKey, group in grouped:
-                first_values = group.head(1)
-                for _, entry in first_values.iterrows():
-                    groupedData[groupKey] = {yAxisParam: entry[yAxisParam] for yAxisParam in yAxisParams}
+        for groupKey, group in grouped:
+            first_values = group.head(1)
+            for _, entry in first_values.iterrows():
+                groupedData[groupKey] = {yAxisParam: entry[yAxisParam] for yAxisParam in yAxisParams}
             
         sortedData = {
             "xAxisData": sorted(groupedData.keys()),  # Sort the keys
