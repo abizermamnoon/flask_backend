@@ -10,6 +10,7 @@ import csv
 import pandas as pd
 import time
 import numpy as np
+import copy
 
 app = Flask(__name__)
 CORS(app)
@@ -17,6 +18,7 @@ CORS(app)
 uploadedFileName = None
 uploadedFileType = None
 df = None
+filtered_df = None
 state = {}
 state = {
     "frame": None
@@ -259,16 +261,18 @@ def createFrame():
 
 @app.route('/get_groups', methods=["POST"])
 def findGroups():
-    global grouped_data, column
+    global grouped_data, column, df
     data = request.json
 
     column = data["column"]
 
-    if column in grouped_data:
+    column_data_type = df.dtypes[column]
+    print('column data type:', column_data_type)
+
+    if column in grouped_data and column_data_type in ['object']:
         groups = list(grouped_data[column].groups.keys())
-        return jsonify(groups)
-    else:
-        return jsonify([])  # Return an empty list if the column is not found
+        
+    return jsonify(groups)
     
 @app.route('/filter', methods=["POST"])
 def findFilter():
@@ -295,67 +299,7 @@ def findFilter():
     # Convert the filtered DataFrame to the response format
     response = {
         "columns": filtered_df.columns.tolist(),
-        "data": filtered_df.head(100).to_dict(orient="records")
-    }
-
-    return jsonify(response)
-
-@app.route('/calculation', methods=["POST"])
-
-def equation():
-    global df
-
-    data = request.json
-    eq = data["calculation"]
-    print('equation:', eq)
-
-    # Split the equation into individual components
-    components = eq.split()
-    print('equation:', components)
-
-    # Extract the new column name
-    new_column_name = components[0][1:-1]
-    print('new column:', new_column_name)
-
-    # Initialize the result column
-    result_column = None
-
-    for i in range(2, len(components), 2):
-        operator = components[i - 1]
-        operand = components[i]
-
-        if operand.startswith("'") and operand.endswith("'"):
-            # Operand is a column name
-            column_name = operand[1:-1]
-            operand_column = df[column_name]
-        else:
-            # Operand is a number
-            operand_value = float(operand)
-            operand_column = pd.Series(operand_value, index=df.index)
-
-        if operator == '=':
-            result_column = operand_column
-        elif operator == '+':
-            result_column += operand_column
-        elif operator == '-':
-            result_column -= operand_column
-        elif operator == '*':
-            result_column *= operand_column
-        elif operator == '/':
-            result_column /= operand_column
-
-    # Append the new column to the DataFrame
-    df[new_column_name] = result_column
-
-    response = {
-        "columns": [
-            {
-                "Header": column,
-                "accessor": column
-            }
-            for column in df.columns
-        ],
-        "data": format_dataframe(df.head(100))
+        "data": format_dataframe(filtered_df.head(100))
     }
 
     return jsonify(response)
@@ -374,6 +318,96 @@ def format_dataframe(df):
         formatted_data.append(formatted_row)
     return formatted_data
 
+@app.route('/calculation', methods=["POST"])
+
+def equation():
+    global df, filtered_df
+
+    data = request.json
+    eq = data["calculation"]
+    print('equation:', eq)
+
+    if filtered_df is None:
+        filtered_df = copy.deepcopy(df)
+        print('Length of dataframe:', len(filtered_df))
+    else:
+        filtered_df = filtered_df
+        print('Length of dataframe:', len(filtered_df))
+
+    # Split the equation into individual components
+    components = eq.split()
+    print('equation:', components)
+
+    # Extract the new column name
+    new_column_name = components[0][1:-1]
+    print('new column:', new_column_name)
+
+    # Initialize the result column
+    result_column = None
+    intermediate_result = None
+
+    for i in range(2, len(components), 2):
+        operator = components[i - 1]
+        operand = components[i]
+
+        if operand.startswith("'") and operand.endswith("'"):
+            # Operand is a column name
+            column_name = operand[1:-1]
+            operand_column = filtered_df[column_name]
+        else:
+            operand_column = float(operand)
+        
+        if operator in ['=', '+', '-', '*', '/']:
+            if operator == '=':
+                intermediate_result = copy.copy(operand_column)
+            elif operator == '+':
+                intermediate_result += operand_column
+                print('operand_column:', operand_column)
+            elif operator == '-':
+                intermediate_result -= operand_column
+                print('operand_column:', operand_column)
+            elif operator == '*':
+                intermediate_result *= operand_column
+                print('operand_column:', operand_column)
+            elif operator == '/':
+                intermediate_result /= operand_column
+                print('operand_column:', operand_column)
+            # Append the new column to the DataFrame
+            result_column = intermediate_result
+            filtered_df[new_column_name] = result_column
+        else:
+            if operator == '<':
+                filtered_df = filtered_df[filtered_df[column_name] < operand_column]
+            elif operator == '>':
+                filtered_df = filtered_df[filtered_df[column_name] > operand_column]
+            elif operator == '==':
+                filtered_df = filtered_df[filtered_df[column_name] == operand_column]
+    response = {
+        "columns": [
+            {
+                "Header": column,
+                "accessor": column
+            }
+            for column in filtered_df.columns
+        ],
+        "data": format_dataframe(filtered_df.head(100))
+    }
+
+    return jsonify(response)
+
+def format_dataframe(df):
+    formatted_data = []
+    for _, row in df.iterrows():
+        formatted_row = {}
+        for column, value in row.items():
+            if isinstance(value, pd.Timestamp):
+                formatted_row[column] = value.strftime("%Y-%m-%d %H:%M:%S")
+            elif isinstance(value, bool):
+                formatted_row[column] = str(value)
+            else:
+                formatted_row[column] = value
+        formatted_data.append(formatted_row)
+    return formatted_data
 
 if __name__ == "__main__":
     app.run(port=5000)
