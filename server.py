@@ -55,7 +55,7 @@ def upload():
             print("Pandas DataFrame has been created.")
         else:
             print("Error: Failed to create Pandas DataFrame from CSV.")
-        state["frame"] = df.head(1000)
+        state["frame"] = df.head(100)
         frame_rep = formatFrame()
         response = jsonify(frame_rep)
 
@@ -143,6 +143,8 @@ def formatFrame():
         for column, value in row.items():
             if isinstance(value, pd.Timestamp):
                 formatted_row[column] = value.strftime("%Y-%m-%d %H:%M:%S")
+            elif isinstance(value, bool):
+                formatted_row[column] = str(value)
             else:
                 formatted_row[column] = value
         frame_rep["data"].append(formatted_row)
@@ -176,7 +178,7 @@ def map_dtype_name(dtype):
     if np.issubdtype(dtype, np.integer):
         return "int"
     elif np.issubdtype(dtype, np.floating):
-        return "float"
+        return "int"
     elif np.issubdtype(dtype, np.object_):
         return "string"
     elif np.issubdtype(dtype, np.datetime64):
@@ -293,10 +295,85 @@ def findFilter():
     # Convert the filtered DataFrame to the response format
     response = {
         "columns": filtered_df.columns.tolist(),
-        "data": filtered_df.head(1000).to_dict(orient="records")
+        "data": filtered_df.head(100).to_dict(orient="records")
     }
 
     return jsonify(response)
+
+@app.route('/calculation', methods=["POST"])
+
+def equation():
+    global df
+
+    data = request.json
+    eq = data["calculation"]
+    print('equation:', eq)
+
+    # Split the equation into individual components
+    components = eq.split()
+    print('equation:', components)
+
+    # Extract the new column name
+    new_column_name = components[0][1:-1]
+    print('new column:', new_column_name)
+
+    # Initialize the result column
+    result_column = None
+
+    for i in range(2, len(components), 2):
+        operator = components[i - 1]
+        operand = components[i]
+
+        if operand.startswith("'") and operand.endswith("'"):
+            # Operand is a column name
+            column_name = operand[1:-1]
+            operand_column = df[column_name]
+        else:
+            # Operand is a number
+            operand_value = float(operand)
+            operand_column = pd.Series(operand_value, index=df.index)
+
+        if operator == '=':
+            result_column = operand_column
+        elif operator == '+':
+            result_column += operand_column
+        elif operator == '-':
+            result_column -= operand_column
+        elif operator == '*':
+            result_column *= operand_column
+        elif operator == '/':
+            result_column /= operand_column
+
+    # Append the new column to the DataFrame
+    df[new_column_name] = result_column
+
+    response = {
+        "columns": [
+            {
+                "Header": column,
+                "accessor": column
+            }
+            for column in df.columns
+        ],
+        "data": format_dataframe(df.head(100))
+    }
+
+    return jsonify(response)
+
+def format_dataframe(df):
+    formatted_data = []
+    for _, row in df.iterrows():
+        formatted_row = {}
+        for column, value in row.items():
+            if isinstance(value, pd.Timestamp):
+                formatted_row[column] = value.strftime("%Y-%m-%d %H:%M:%S")
+            elif isinstance(value, bool):
+                formatted_row[column] = str(value)
+            else:
+                formatted_row[column] = value
+        formatted_data.append(formatted_row)
+    return formatted_data
+
 
 if __name__ == "__main__":
     app.run(port=5000)
