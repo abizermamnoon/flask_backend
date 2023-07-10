@@ -45,6 +45,7 @@ type_1 = None
 pie_groupedData = None
 groupedData = {}
 
+
 @app.route("/upload", methods=["POST"])
 def upload():
     if "file" not in request.files:
@@ -63,7 +64,6 @@ def upload():
         df = convert_datetime_columns(df)
         
     elif uploadedFileType == "text/csv":
-        start_time = time.time()
         print('Uploaded File Type:', uploadedFileType)
         df = pd.read_csv(myFile)
         df = convert_datetime_columns(df)
@@ -72,32 +72,11 @@ def upload():
             print("Pandas DataFrame has been created.")
         else:
             print("Error: Failed to create Pandas DataFrame from CSV.")
-        state["frame"] = df.head(100)
-        frame_rep = formatFrame()
-        response = jsonify(frame_rep)
-
+        
     elif uploadedFileType == "application/octet-stream" and myFile.filename.endswith(".parquet"):
         print('Uploaded File Type:', uploadedFileType)
         df = pd.read_parquet(myFile)
         df = convert_datetime_columns(df)
-
-    # Perform groupby operations immediately after uploading the file for all columns
-    
-    for column in df.columns:
-        grouped_data[column] = df.groupby(column)
-
-    grouped_monthly = group_by_monthly()
-    grouped_yearly = group_by_yearly()
-    grouped_daily = group_by_daily()
-        
-    # Slice the first 10 rows and save it as '10_rows.json'
-    slicedData = df.head(5)
-    slicedDataFilePath = "./public/10_rows.json"
-    slicedData.to_json(slicedDataFilePath, orient="records")
-
-    end_time = time.time()
-    execution_time = end_time - start_time
-    print("Execution time:", execution_time, "seconds")
 
     return {
         "file": myFile.filename,
@@ -117,6 +96,109 @@ def convert_datetime_columns(df):
             pass
     print('datetime_columns:', converted_columns)
     return df
+
+@app.route("/nullval", methods=["POST"])
+def countnul():
+    global df
+    df_nul = df.isnull().sum()
+    df_nul = df_nul.to_frame(name='count_nuls').reset_index()
+    df_nul.columns = ['columns', 'count_nuls']
+    print('df_nul:', df_nul)
+    formattedData = format_isnul(df_nul)
+    return jsonify(formattedData)
+
+def format_isnul(df):
+    state = {}
+    state = {
+        "frame": None
+    }
+    headers = ['columns', 'count_nuls']
+
+    frame_rep = dict()
+    frame_rep["columns"] = [{
+        "Header": column,
+        "accessor": column
+    } for column in headers]
+    frame_rep["data"] = []
+
+    state["frame"] = df
+    print('state:', state["frame"])
+    for _, row in state["frame"].iterrows():
+        formatted_row = {}
+        for column, value in row.items():               
+            formatted_row[column] = value
+        frame_rep["data"].append(formatted_row)
+    
+    print('frame_rep:', frame_rep)
+
+    return frame_rep
+
+@app.route("/dropna", methods=["POST"])
+def findna():
+    data = request.json
+    action = data['action']
+    print('Requested Data:', data)
+
+    if action == 'drop':
+        dropna()
+        return "Rows with NA values have been dropped"
+    if action == 'next':
+        nextna()
+        return "cells with NA values have been replaced by rows below it"
+    if action == 'prev':
+        prevna()
+        return "cells with NA values have been replaced by rows above it"
+    if action == 'interp':
+        interpna()
+        return "cells with NA values have been replaced by linear interpolation"
+    
+def dropna():
+    global df
+    df = df.dropna()
+
+def nextna():
+    global df
+    df = df.fillna(method ='bfill')
+
+def prevna():
+    global df
+    df = df.fillna(method ='pad')
+
+def interpna():
+    global df
+    df = df.interpolate(method ='linear', limit_direction ='forward')
+
+
+@app.route("/loadTable", methods=["POST"])
+def load():
+
+    global df, grouped_monthly, grouped_yearly, grouped_daily, state, frame_rep, response, grouped_data, data_types
+
+    start_time = time.time()
+
+    state["frame"] = df.head(100)
+    frame_rep = formatFrame()
+    response = jsonify(frame_rep)
+
+    # Perform groupby operations immediately after uploading the file for all columns
+    
+    for column in df.columns:
+        grouped_data[column] = df.groupby(column)
+
+    grouped_monthly = group_by_monthly()
+    grouped_yearly = group_by_yearly()
+    grouped_daily = group_by_daily()
+        
+    # Slice the first 10 rows and save it as '10_rows.json'
+    slicedData = df.head(5)
+    slicedDataFilePath = "./public/10_rows.json"
+    slicedData.to_json(slicedDataFilePath, orient="records")
+
+    end_time = time.time()
+    execution_time = end_time - start_time
+    print("Execution time:", execution_time, "seconds")
+
+    return "Data has been loaded"
 
 def group_by_monthly():
     global df, converted_columns
@@ -198,6 +280,8 @@ def map_dtype_name(dtype):
         return "int"
     elif np.issubdtype(dtype, np.object_):
         return "string"
+    elif np.issubdtype(dtype, np.bool_):
+        return "string"
     elif np.issubdtype(dtype, np.datetime64):
         return "datetime"
     else:
@@ -252,13 +336,10 @@ def sort_data():
         else:
             groupedData = {}
             if interval == "daily":
-                # df['datetime'] = pd.to_datetime(df['datetime'])
                 grouped = grouped_daily[xAxisParam]                
             elif interval == "monthly":
-                # df['datetime'] = pd.to_datetime(df['datetime'])
                 grouped = grouped_monthly[xAxisParam]                
             elif interval == "yearly":
-                # df['datetime'] = pd.to_datetime(df['datetime'])
                 grouped = grouped_yearly[xAxisParam]               
             else:
                 return {"msg": "Invalid interval"}, 400
@@ -298,17 +379,26 @@ def findGroups():
     column_data_type = df.dtypes[column]
     print('column data type:', column_data_type)
 
-    if column in grouped_data and column_data_type in ['object']:
+    if column in grouped_data and column_data_type in ['object', 'bool']:
         groups = list(grouped_data[column].groups.keys())
+        groups = [str(group) for group in groups]
+    print('groups:', groups)
         
     return jsonify(groups)
     
 @app.route('/filter', methods=["POST"])
 def findFilter():
-    global df, column
+    global df, column, groups
     data = request.json
 
     groups = data["group"]
+    
+
+    if groups == ['False']:
+        groups = [False]
+    elif groups == ['True']:
+        groups = [True]
+
     print('groups:', groups)
 
     if groups:
