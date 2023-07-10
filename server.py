@@ -29,6 +29,21 @@ column = None
 converted_columns = []
 grouped_data = {}
 data_types = {}
+sortedData = {}
+xAxisParam = None
+yAxisParams = []
+type = None
+xAxisParam_1 = None
+yAxisParams_1 = []
+state_1 = {}
+state_1 = {
+    "frame": None
+}
+frame_rep_1 = {} 
+headers = []
+type_1 = None
+pie_groupedData = None
+groupedData = {}
 
 @app.route("/upload", methods=["POST"])
 def upload():
@@ -191,7 +206,7 @@ def map_dtype_name(dtype):
 @app.route("/sortData", methods=["POST"])
 def sort_data():
     start_time = time.time()
-    global df, grouped_monthly, grouped_daily, grouped_yearly, grouped_data, converted_columns
+    global df, grouped_monthly, grouped_daily, grouped_yearly, grouped_data, converted_columns, xAxisParam, yAxisParams, xAxisParam_1, yAxisParams_1, type_1, type
     print('Streamed Data Length in Sort:', len(df))
 
     data = request.json
@@ -199,47 +214,60 @@ def sort_data():
     print('Received parameters:', data)
     xAxisParam = data["xAxisParam"]
     yAxisParams = data["yAxisParams"]
-    type = data.get("type")  # Use get method to retrieve the value with a default None if the key doesn't exist
+    type = data.get("type")   # Use get method to retrieve the value with a default None if the key doesn't exist
     interval = data.get("interval")  # Use get method to retrieve the value with a default None if the key doesn't exist
+
+    if data["xAxisParam"] and len(data["xAxisParam"]) > 1:
+        xAxisParam_1 = copy.copy(xAxisParam)
+        print('X-Axis Parameter:', xAxisParam_1)
+    if data["yAxisParams"] != []:
+        yAxisParams_1 = copy.copy(yAxisParams)
+        print('Y-Axis Parameter:', yAxisParams_1)
+    if type:
+        type_1 = copy.copy(type)
+        print('Chart Type:', type_1)
+    
 
     if not yAxisParams or len(yAxisParams) == 0:
         return "", 200
-
-    sortedData = {}
+    
+    global sortedData, pie_groupedData, groupedData
 
     if type == "pie":
-        groupedData = df.groupby(yAxisParams[0]).size().reset_index(name='count')
-        groupedData = groupedData.sort_values('count', ascending=False)
-        print('groupedData:', groupedData)
+        pie_groupedData = df.groupby(yAxisParams[0]).size().reset_index(name='count')
+        pie_groupedData = pie_groupedData.sort_values('count', ascending=False)
+        print('pie_groupedData:', pie_groupedData)
         sortedData = {
-            "xAxisData": [''.join(map(str, group)) for group in groupedData[yAxisParams].values],
-            "yAxisData": groupedData['count'].values.tolist()
+            "xAxisData": [''.join(map(str, group)) for group in pie_groupedData[yAxisParams].values],
+            "yAxisData": pie_groupedData['count'].values.tolist()
         }
         end_time = time.time()
         execution_time = end_time - start_time
         print("Execution time:", execution_time, "seconds")
     else:
-        groupedData = {}
+        
         if xAxisParam not in converted_columns:
-            grouped = grouped_data[xAxisParam]
+           grouped = grouped_data[xAxisParam]
             
         else:
+            groupedData = {}
             if interval == "daily":
                 # df['datetime'] = pd.to_datetime(df['datetime'])
-                grouped = grouped_daily[xAxisParam]
+                grouped = grouped_daily[xAxisParam]                
             elif interval == "monthly":
                 # df['datetime'] = pd.to_datetime(df['datetime'])
-                grouped = grouped_monthly[xAxisParam]
+                grouped = grouped_monthly[xAxisParam]                
             elif interval == "yearly":
                 # df['datetime'] = pd.to_datetime(df['datetime'])
-                grouped = grouped_yearly[xAxisParam]
+                grouped = grouped_yearly[xAxisParam]               
             else:
                 return {"msg": "Invalid interval"}, 400
             
         for groupKey, group in grouped:
             first_values = group.head(1)
             for _, entry in first_values.iterrows():
-                groupedData[groupKey] = {yAxisParam: entry[yAxisParam] for yAxisParam in yAxisParams}
+                groupedData[groupKey] = {yAxisParam: entry[yAxisParam] if yAxisParam in entry else None for yAxisParam in yAxisParams}
+        print('grouped data:', groupedData)
             
         sortedData = {
             "xAxisData": sorted(groupedData.keys()),  # Sort the keys
@@ -251,6 +279,7 @@ def sort_data():
         
     
     return sortedData, 200
+
 
 @app.route('/create', methods=["POST"])
 def createFrame():
@@ -408,6 +437,61 @@ def format_dataframe(df):
                 formatted_row[column] = value
         formatted_data.append(formatted_row)
     return formatted_data
+
+@app.route("/chartData", methods=["POST"])
+def createTable():
+    formattedData = format_frame()
+    return jsonify(formattedData)
+
+def format_frame():
+    global xAxisParam_1, yAxisParams_1, type_1, groupedData, pie_groupedData, state_1
+    headers = []
+
+    if type_1 == 'pie':  
+        headers.append('count')
+        for yAxisParm in yAxisParams_1:
+            headers.append(yAxisParm)
+        
+    else:
+        for yAxisParm in yAxisParams_1:
+            headers.append(yAxisParm)
+        headers.append(xAxisParam_1)
+
+    print('headers:', headers)
+
+    frame_rep_1 = dict()
+    frame_rep_1["columns"] = [{
+        "Header": column,
+        "accessor": column
+    } for column in headers]
+    frame_rep_1["data"] = []
+
+    if type_1 == 'pie':
+        state_1["frame"] = pie_groupedData.head(200)
+        print('state_1:', state_1["frame"])
+        for _, row in state_1["frame"].iterrows():
+            formatted_row = {}
+            for column, value in row.items():               
+                formatted_row[column] = value
+            frame_rep_1["data"].append(formatted_row)
+            
+    else:
+        count = 0 
+        for key, row in groupedData.items():
+            if count >= 200:  # Check if the maximum limit is reached
+                break
+            count += 1
+            data_row = {}
+            data_row[xAxisParam_1] = key
+            for yAxisParam in yAxisParams_1:
+                data_row[yAxisParam] = row[yAxisParam]
+            frame_rep_1["data"].append(data_row)
+    
+    print('frame_rep_1:', frame_rep_1)
+
+    return frame_rep_1
+    
+    
 
 if __name__ == "__main__":
     app.run(port=5000)
