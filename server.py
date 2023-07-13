@@ -99,13 +99,16 @@ def convert_datetime_columns(df):
 @app.route("/nullval", methods=["POST"])
 def countnul():
     global df
-    df_nul = df.isnull().sum()
-    df_nul = df_nul.to_frame(name='count_nuls').reset_index()
-    df_nul.columns = ['columns', 'count_nuls']
-    df_nul = df_nul[df_nul['count_nuls'] > 0]
-    print('df_nul:', df_nul)
-    formattedData = format_isnul(df_nul)
-    return jsonify(formattedData)
+    if df is not None:
+        df_nul = df.isnull().sum()
+        df_nul = df_nul.to_frame(name='count_nuls').reset_index()
+        df_nul.columns = ['columns', 'count_nuls']
+        df_nul = df_nul[df_nul['count_nuls'] > 0]
+        print('df_nul:', df_nul)
+        formattedData = format_isnul(df_nul)
+        return jsonify(formattedData)
+    else:
+        return 'Dataframe not uploaded'
 
 def format_isnul(df):
     state = {}
@@ -270,8 +273,11 @@ def index():
 @app.route("/coltype", methods=["POST"])
 def findColType():
     global df
-    dtypes_dict = df.dtypes.apply(lambda x: map_dtype_name(x)).to_dict()
-    return jsonify(dtypes_dict)
+    if df is not None:
+        dtypes_dict = df.dtypes.apply(lambda x: map_dtype_name(x)).to_dict()
+        return jsonify(dtypes_dict)
+    else:
+        return 'Dataframe has not been uploaded'
 
 def map_dtype_name(dtype):
     if np.issubdtype(dtype, np.integer):
@@ -291,7 +297,8 @@ def map_dtype_name(dtype):
 def sort_data():
     start_time = time.time()
     global df, grouped_monthly, grouped_daily, grouped_yearly, grouped_data, converted_columns, xAxisParam, yAxisParams, xAxisParam_1, yAxisParams_1, type_1, type
-    print('Streamed Data Length in Sort:', len(df))
+    if df is not None:
+        print('Streamed Data Length in Sort:', len(df))
 
     data = request.json
 
@@ -540,6 +547,7 @@ def format_frame():
     xAxisParam_1 = data['xAxisParam']
     yAxisParams_1 = data['yAxisParams']
     type_1 = data['type']
+    grouped_data = None
 
     headers = []
 
@@ -566,22 +574,24 @@ def format_frame():
     frame_rep_1["data"] = []
 
     if len(xAxisParam) == 0:
-        state_1["frame"] = pie_groupedData.head(200)
-        print('state_1:', state_1["frame"])
-        for _, row in state_1["frame"].iterrows():
-            formatted_row = {}
-            for column, value in row.items():               
-                formatted_row[column] = value
-            frame_rep_1["data"].append(formatted_row)
+        if pie_groupedData is not None:
+            state_1["frame"] = pie_groupedData.head(200)
+            print('state_1:', state_1["frame"])
+            for _, row in state_1["frame"].iterrows():
+                formatted_row = {}
+                for column, value in row.items():               
+                    formatted_row[column] = value
+                frame_rep_1["data"].append(formatted_row)
             
     else:
-        state_1["frame"] = grouped_data.head(200)
-        print('state_1:', state_1["frame"])
-        for _, row in state_1["frame"].iterrows():
-            formatted_row = {}
-            for column, value in row.items():               
-                formatted_row[column] = value
-            frame_rep_1["data"].append(formatted_row)
+        if grouped_data is not None:
+            state_1["frame"] = grouped_data.head(200)
+            print('state_1:', state_1["frame"])
+            for _, row in state_1["frame"].iterrows():
+                formatted_row = {}
+                for column, value in row.items():               
+                    formatted_row[column] = value
+                frame_rep_1["data"].append(formatted_row)
     
     print('frame_rep_1:', frame_rep_1)
 
