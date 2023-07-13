@@ -45,7 +45,6 @@ type_1 = None
 pie_groupedData = None
 groupedData = {}
 
-
 @app.route("/upload", methods=["POST"])
 def upload():
     if "file" not in request.files:
@@ -103,6 +102,7 @@ def countnul():
     df_nul = df.isnull().sum()
     df_nul = df_nul.to_frame(name='count_nuls').reset_index()
     df_nul.columns = ['columns', 'count_nuls']
+    df_nul = df_nul[df_nul['count_nuls'] > 0]
     print('df_nul:', df_nul)
     formattedData = format_isnul(df_nul)
     return jsonify(formattedData)
@@ -317,7 +317,7 @@ def sort_data():
     
     global sortedData, pie_groupedData, groupedData
 
-    if type == "pie":
+    if len(xAxisParam) == 0:
         pie_groupedData = df.groupby(yAxisParams[0]).size().reset_index(name='count')
         pie_groupedData = pie_groupedData.sort_values('count', ascending=False)
         print('pie_groupedData:', pie_groupedData)
@@ -530,23 +530,32 @@ def format_dataframe(df):
 
 @app.route("/chartData", methods=["POST"])
 def createTable():
+    
     formattedData = format_frame()
     return jsonify(formattedData)
 
 def format_frame():
-    global xAxisParam_1, yAxisParams_1, type_1, groupedData, pie_groupedData, state_1
+    global groupedData, pie_groupedData, state_1
+    data = request.json
+    xAxisParam_1 = data['xAxisParam']
+    yAxisParams_1 = data['yAxisParams']
+    type_1 = data['type']
+
     headers = []
 
-    if type_1 == 'pie':  
+    if len(xAxisParam_1) == 0:  
         headers.append('count')
         for yAxisParm in yAxisParams_1:
-            headers.append(yAxisParm)
+            if yAxisParm:
+                headers.append(yAxisParm)
         
     else:
-        for yAxisParm in yAxisParams_1:
-            headers.append(yAxisParm)
         headers.append(xAxisParam_1)
-
+        for yAxisParm in yAxisParams_1:
+            if yAxisParm:
+                headers.append(yAxisParm)
+        grouped_data = pd.DataFrame.from_dict(groupedData, orient='index').reset_index()
+        grouped_data.columns = headers
     print('headers:', headers)
 
     frame_rep_1 = dict()
@@ -556,7 +565,7 @@ def format_frame():
     } for column in headers]
     frame_rep_1["data"] = []
 
-    if type_1 == 'pie':
+    if len(xAxisParam) == 0:
         state_1["frame"] = pie_groupedData.head(200)
         print('state_1:', state_1["frame"])
         for _, row in state_1["frame"].iterrows():
@@ -566,22 +575,39 @@ def format_frame():
             frame_rep_1["data"].append(formatted_row)
             
     else:
-        count = 0 
-        for key, row in groupedData.items():
-            if count >= 200:  # Check if the maximum limit is reached
-                break
-            count += 1
-            data_row = {}
-            data_row[xAxisParam_1] = key
-            for yAxisParam in yAxisParams_1:
-                data_row[yAxisParam] = row[yAxisParam]
-            frame_rep_1["data"].append(data_row)
+        state_1["frame"] = grouped_data.head(200)
+        print('state_1:', state_1["frame"])
+        for _, row in state_1["frame"].iterrows():
+            formatted_row = {}
+            for column, value in row.items():               
+                formatted_row[column] = value
+            frame_rep_1["data"].append(formatted_row)
     
     print('frame_rep_1:', frame_rep_1)
 
     return frame_rep_1
-    
-    
 
+@app.route("/summarystat", methods=["POST"])
+def statcalc():
+    global df
+    data = request.json
+    print('Received Data:', data)
+    stat = data['value']
+    series = data['SeriesOption']
+
+    if stat == 'count':
+        result = df.shape[0]
+    elif stat == 'median':
+        result = df[series].median().round(2)
+    elif stat == 'average':
+        result = df[series].mean().round(2)
+    elif stat == 'sum':
+        result = df[series].sum()
+    else:
+        result = df[series].nunique()
+    
+    response = jsonify({series: result})
+    return response
+    
 if __name__ == "__main__":
     app.run(port=5000)
