@@ -7,11 +7,11 @@ import json
 import os
 import datetime
 import csv
-import pandas as pd
+# import pandas as pd
 import time
 import numpy as np
 import copy
-
+import pandas as pd
 app = Flask(__name__)
 CORS(app)
 
@@ -45,6 +45,7 @@ type_1 = None
 pie_groupedData = None
 groupedData = {}
 
+
 @app.route("/upload", methods=["POST"])
 def upload():
     if "file" not in request.files:
@@ -60,12 +61,12 @@ def upload():
     if uploadedFileType == "application/json":
         print('Uploaded File Type:', uploadedFileType)
         df = pd.read_json(myFile)
-        df = convert_datetime_columns(df)
+        df = convert_datetime_columns(df, ['%Y-%m-%d %H:%M:%S', '%m-%d-%Y %H:%M:%S', '%d-%m-%Y %H:%M:%S', '%d-%m-%Y', '%m-%d-%Y', '%Y-%m-%d'])
         
     elif uploadedFileType == "text/csv":
         print('Uploaded File Type:', uploadedFileType)
         df = pd.read_csv(myFile)
-        df = convert_datetime_columns(df)
+        df = convert_datetime_columns(df, ['%Y-%m-%d %H:%M:%S', '%m-%d-%Y %H:%M:%S', '%d-%m-%Y %H:%M:%S', '%d-%m-%Y', '%m-%d-%Y', '%Y-%m-%d'])
         # df['datetime'] = pd.to_datetime(df['datetime'])
         if isinstance(df, pd.DataFrame):
             print("Pandas DataFrame has been created.")
@@ -75,7 +76,7 @@ def upload():
     elif uploadedFileType == "application/octet-stream" and myFile.filename.endswith(".parquet"):
         print('Uploaded File Type:', uploadedFileType)
         df = pd.read_parquet(myFile)
-        df = convert_datetime_columns(df)
+        df = convert_datetime_columns(df, ['%Y-%m-%d %H:%M:%S', '%m-%d-%Y %H:%M:%S', '%d-%m-%Y %H:%M:%S', '%d-%m-%Y', '%m-%d-%Y', '%Y-%m-%d'])
 
     return {
         "file": myFile.filename,
@@ -83,16 +84,17 @@ def upload():
         "ty": myFile.content_type
     }
 
-def convert_datetime_columns(df):
+def convert_datetime_columns(df, formats):
     datetime_columns = df.select_dtypes(include=[object]).columns
     global converted_columns
     # print('datetime_columns:', datetime_columns)
     for column in datetime_columns:
-        try:
-            df[column] = pd.to_datetime(df[column], format='%Y-%m-%d %H:%M:%S')
-            converted_columns.append(column)
-        except ValueError:
-            pass
+        for fmt in formats:
+            try:
+                df[column] = pd.to_datetime(df[column], format=fmt)
+                converted_columns.append(column)
+            except ValueError:
+                pass
     print('datetime_columns:', converted_columns)
     return df
 
@@ -338,6 +340,7 @@ def sort_data():
     else:
         
         if xAxisParam not in converted_columns:
+           groupedData = {}
            grouped = grouped_data[xAxisParam]
             
         else:
@@ -616,7 +619,8 @@ def statcalc():
     else:
         result = df[series].nunique()
     
-    response = jsonify({series: result})
+    response = jsonify({f"{series} ({stat})": result})
+    print('response:', response)
     return response
     
 if __name__ == "__main__":
