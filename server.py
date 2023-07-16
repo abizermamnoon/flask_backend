@@ -43,8 +43,9 @@ frame_rep_1 = {}
 headers = []
 type_1 = None
 pie_groupedData = None
+box_groupedData = None
 groupedData = {}
-
+sumstat = {}
 
 @app.route("/upload", methods=["POST"])
 def upload():
@@ -61,12 +62,12 @@ def upload():
     if uploadedFileType == "application/json":
         print('Uploaded File Type:', uploadedFileType)
         df = pd.read_json(myFile)
-        df = convert_datetime_columns(df, ['%Y-%m-%d %H:%M:%S', '%m-%d-%Y %H:%M:%S', '%d-%m-%Y %H:%M:%S', '%d-%m-%Y', '%m-%d-%Y', '%Y-%m-%d'])
+        df = convert_datetime_columns(df)
         
     elif uploadedFileType == "text/csv":
         print('Uploaded File Type:', uploadedFileType)
         df = pd.read_csv(myFile)
-        df = convert_datetime_columns(df, ['%Y-%m-%d %H:%M:%S', '%m-%d-%Y %H:%M:%S', '%d-%m-%Y %H:%M:%S', '%d-%m-%Y', '%m-%d-%Y', '%Y-%m-%d'])
+        df = convert_datetime_columns(df)
         # df['datetime'] = pd.to_datetime(df['datetime'])
         if isinstance(df, pd.DataFrame):
             print("Pandas DataFrame has been created.")
@@ -76,7 +77,7 @@ def upload():
     elif uploadedFileType == "application/octet-stream" and myFile.filename.endswith(".parquet"):
         print('Uploaded File Type:', uploadedFileType)
         df = pd.read_parquet(myFile)
-        df = convert_datetime_columns(df, ['%Y-%m-%d %H:%M:%S', '%m-%d-%Y %H:%M:%S', '%d-%m-%Y %H:%M:%S', '%d-%m-%Y', '%m-%d-%Y', '%Y-%m-%d'])
+        df = convert_datetime_columns(df)
 
     return {
         "file": myFile.filename,
@@ -84,17 +85,16 @@ def upload():
         "ty": myFile.content_type
     }
 
-def convert_datetime_columns(df, formats):
+def convert_datetime_columns(df):
     datetime_columns = df.select_dtypes(include=[object]).columns
     global converted_columns
     # print('datetime_columns:', datetime_columns)
     for column in datetime_columns:
-        for fmt in formats:
-            try:
-                df[column] = pd.to_datetime(df[column], format=fmt)
-                converted_columns.append(column)
-            except ValueError:
-                pass
+        try:
+            df[column] = pd.to_datetime(df[column], format='%Y-%m-%d %H:%M:%S')
+            converted_columns.append(column)
+        except ValueError:
+            pass
     print('datetime_columns:', converted_columns)
     return df
 
@@ -177,7 +177,7 @@ def interpna():
 @app.route("/loadTable", methods=["POST"])
 def load():
 
-    global df, grouped_monthly, grouped_yearly, grouped_daily, state, frame_rep, response, grouped_data, data_types
+    global df, grouped_monthly, grouped_yearly, grouped_daily, state, frame_rep, response, grouped_data, data_types, sumstat
 
     start_time = time.time()
 
@@ -189,6 +189,19 @@ def load():
     
     for column in df.columns:
         grouped_data[column] = df.groupby(column)
+    
+    for column in df.columns:
+        print('column type:', df[column].dtype)
+        if df[column].dtype in ['int64', 'float64']:
+            statistics = df[column].describe()
+            sumstat[column] = {
+            'min': statistics['min'],
+            '25%': statistics['25%'],
+            '50%': statistics['50%'],
+            '75%': statistics['75%'],
+            'max': statistics['max']
+            }
+    print('sumstat:', sumstat)
 
     grouped_monthly = group_by_monthly()
     grouped_yearly = group_by_yearly()
@@ -298,7 +311,7 @@ def map_dtype_name(dtype):
 @app.route("/sortData", methods=["POST"])
 def sort_data():
     start_time = time.time()
-    global df, grouped_monthly, grouped_daily, grouped_yearly, grouped_data, converted_columns, xAxisParam, yAxisParams, xAxisParam_1, yAxisParams_1, type_1, type
+    global df, grouped_monthly, grouped_daily, grouped_yearly, grouped_data, converted_columns, xAxisParam, yAxisParams, xAxisParam_1, yAxisParams_1, type_1, type, box_groupedData, sumstat
     if df is not None:
         print('Streamed Data Length in Sort:', len(df))
 
@@ -326,7 +339,7 @@ def sort_data():
     
     global sortedData, pie_groupedData, groupedData
 
-    if len(xAxisParam) == 0:
+    if len(xAxisParam) == 0 and type != 'boxplot':
         pie_groupedData = df.groupby(yAxisParams[0]).size().reset_index(name='count')
         pie_groupedData = pie_groupedData.sort_values('count', ascending=False)
         print('pie_groupedData:', pie_groupedData)
@@ -337,6 +350,17 @@ def sort_data():
         end_time = time.time()
         execution_time = end_time - start_time
         print("Execution time:", execution_time, "seconds")
+    elif type == 'boxplot':
+        groupedData = {}
+        result = []
+        for param in yAxisParams:
+            grouped = sumstat[param]
+            valuesArray = list(grouped.values())
+            result.append(valuesArray)
+        print('result:', result)
+        return result
+    
+        
     else:
         
         if xAxisParam not in converted_columns:
@@ -550,24 +574,42 @@ def format_frame():
     xAxisParam_1 = data['xAxisParam']
     yAxisParams_1 = data['yAxisParams']
     type_1 = data['type']
-    grouped_data = None
+    grouped_data = pd.DataFrame()
+    print('Chart Type1:', type_1)
+    print('Data Received:', data)
+    dtype_list = [] 
+
+    for yAxisParm in yAxisParams_1:
+        if yAxisParm:
+            dtype_list.append(df[yAxisParm].dtype)
+    print('dtypes list:', dtype_list)
 
     headers = []
-
-    if len(xAxisParam_1) == 0:  
-        headers.append('count')
-        for yAxisParm in yAxisParams_1:
-            if yAxisParm:
-                headers.append(yAxisParm)
+    if len(xAxisParam_1) == 0:
+        if np.object_ in dtype_list:
+            headers.append('count')
+            for yAxisParm in yAxisParams_1:
+                if yAxisParm:
+                    headers.append(yAxisParm)
+        else:
+            print('in boxplot')
+            headers.append('stats')
+            for yAxisParm in yAxisParams_1:
+                if yAxisParm:
+                    headers.append(yAxisParm)
+                    column_data = df[yAxisParm].describe()[['min', '25%', '50%', '75%', 'max']]
+                    grouped_data = grouped_data.append(column_data)
+            grouped_data = grouped_data.transpose().reset_index()
+            grouped_data.columns = headers   
+            print('grouped_data:', grouped_data)
         
-    else:
+    elif len(xAxisParam_1) > 0:
         headers.append(xAxisParam_1)
         for yAxisParm in yAxisParams_1:
             if yAxisParm:
                 headers.append(yAxisParm)
         grouped_data = pd.DataFrame.from_dict(groupedData, orient='index').reset_index()
         grouped_data.columns = headers
-    print('headers:', headers)
 
     frame_rep_1 = dict()
     frame_rep_1["columns"] = [{
@@ -576,17 +618,28 @@ def format_frame():
     } for column in headers]
     frame_rep_1["data"] = []
 
-    if len(xAxisParam) == 0:
-        if pie_groupedData is not None:
-            state_1["frame"] = pie_groupedData.head(200)
-            print('state_1:', state_1["frame"])
-            for _, row in state_1["frame"].iterrows():
-                formatted_row = {}
-                for column, value in row.items():               
-                    formatted_row[column] = value
-                frame_rep_1["data"].append(formatted_row)
+    if len(xAxisParam) == 0: 
+        if np.object_ in dtype_list:
+            if pie_groupedData is not None:
+                state_1["frame"] = pie_groupedData.head(200)
+                print('state_1:', state_1["frame"])
+                for _, row in state_1["frame"].iterrows():
+                    formatted_row = {}
+                    for column, value in row.items():               
+                        formatted_row[column] = value
+                    frame_rep_1["data"].append(formatted_row)
+        else:
+            if grouped_data is not None:
+                print('type of frame')
+                state_1["frame"] = grouped_data
+                print('state_1:', state_1["frame"])
+                for _, row in state_1["frame"].iterrows():
+                    formatted_row = {}
+                    for column, value in row.items():               
+                        formatted_row[column] = value
+                    frame_rep_1["data"].append(formatted_row)
             
-    else:
+    elif len(xAxisParam) > 0 and type_1 != 'boxplot':
         if grouped_data is not None:
             state_1["frame"] = grouped_data.head(200)
             print('state_1:', state_1["frame"])
@@ -595,7 +648,6 @@ def format_frame():
                 for column, value in row.items():               
                     formatted_row[column] = value
                 frame_rep_1["data"].append(formatted_row)
-    
     print('frame_rep_1:', frame_rep_1)
 
     return frame_rep_1
