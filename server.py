@@ -348,6 +348,8 @@ def map_dtype_name(dtype):
 def sort_data():
     start_time = time.time()
     global df, grouped_monthly, grouped_daily, grouped_yearly, grouped_data, converted_columns, xAxisParam, yAxisParams, xAxisParam_1, yAxisParams_1, type_1, type, box_groupedData, sumstat
+    min_yAxisData = 0
+    max_yAxisData = 0
     if df is not None:
         print('Streamed Data Length in Sort:', len(df))
 
@@ -386,6 +388,7 @@ def sort_data():
         end_time = time.time()
         execution_time = end_time - start_time
         print("Execution time:", execution_time, "seconds")
+        return sortedData, 200
     elif type == 'boxplot':
         groupedData = {}
         result = []
@@ -394,10 +397,8 @@ def sort_data():
             valuesArray = list(grouped.values())
             result.append(valuesArray)
         print('result:', result)
-        return result
-    
-        
-    else:
+        return result 
+    elif type != 'heatmap' and len(xAxisParam) > 0:
         
         if xAxisParam not in converted_columns:
            groupedData = {}
@@ -427,9 +428,72 @@ def sort_data():
         end_time = time.time()
         execution_time = end_time - start_time
         print("Execution time:", execution_time, "seconds")
-        
+        return sortedData, 200
     
-    return sortedData, 200
+    else:
+        groupedData = pd.DataFrame(columns=[xAxisParam] + yAxisParams)
+        if interval == "daily":
+            grouped = grouped_daily[xAxisParam]
+        elif interval == "monthly":
+            grouped = grouped_monthly[xAxisParam]
+        elif interval == "yearly":
+            grouped = grouped_yearly[xAxisParam]           
+        else:
+            return {"msg": "Invalid interval"}, 400
+        
+        for groupKey, group in grouped:
+            first_values = group.head(1)
+            if not first_values.empty:
+                values_dict = {yAxisParam: first_values.iloc[0][yAxisParam] if yAxisParam in first_values.columns else None for yAxisParam in yAxisParams}
+                groupedData = groupedData.append({xAxisParam: groupKey, **values_dict}, ignore_index=True)
+
+        groupedData[xAxisParam] = pd.to_datetime(groupedData[xAxisParam])
+
+        if interval == 'monthly':
+            groupedData['month'] = groupedData[xAxisParam].dt.month
+            groupedData[xAxisParam] = groupedData[xAxisParam].dt.year
+            groupedData['datetime_uniqueness'] = groupedData[xAxisParam].factorize()[0]
+            groupedData['month_uniqueness'] = groupedData['month'].factorize()[0]
+            groupedData['index_array'] = groupedData.apply(lambda row: [row['datetime_uniqueness'], row['month_uniqueness'], row[yAxisParams[0]]], axis=1)
+            min_yAxisData = groupedData[yAxisParams[0]].min()
+            max_yAxisData = groupedData[yAxisParams[0]].max()
+            groupedData = groupedData.drop([yAxisParams[0], 'datetime_uniqueness', 'month_uniqueness'], axis=1)
+        elif interval == 'daily':  
+            groupedData['day'] = groupedData[xAxisParam].dt.strftime('%d')
+            groupedData[xAxisParam] = groupedData[xAxisParam].dt.strftime('%Y-%m')
+            groupedData['datetime_uniqueness'] = groupedData[xAxisParam].factorize()[0]
+            groupedData['day_uniqueness'] = groupedData['day'].factorize()[0]
+            groupedData['index_array'] = groupedData.apply(lambda row: [row['datetime_uniqueness'], row['day_uniqueness'], row[yAxisParams[0]]], axis=1)
+            min_yAxisData = groupedData[yAxisParams[0]].min()
+            max_yAxisData = groupedData[yAxisParams[0]].max()
+            groupedData = groupedData.drop([yAxisParams[0], 'datetime_uniqueness', 'day_uniqueness'], axis=1)
+
+        # Calculate min and max values of the yAxisData
+        
+
+        print('groupedData:', groupedData)
+        print('min:', min_yAxisData)
+        print('max:', max_yAxisData)
+
+        second_column = groupedData.columns[1]
+
+         # Create the sortedData dictionary as per the desired format
+        sortedData = {
+            "xAxisData": groupedData[xAxisParam].unique().tolist(),
+            "yAxisData": groupedData[second_column].unique().tolist(),
+            "data": groupedData['index_array'].tolist(),
+            "min": min_yAxisData,
+            "max": max_yAxisData
+        }
+
+        # Convert the sortedData dictionary to JSON format
+        sortedData_json = json.dumps(sortedData)
+
+        print('sorted data:', sortedData_json)
+
+        return sortedData_json, 200
+        
+
 
 
 @app.route('/create', methods=["POST"])
