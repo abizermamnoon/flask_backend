@@ -62,13 +62,10 @@ def upload():
     if uploadedFileType == "application/json":
         print('Uploaded File Type:', uploadedFileType)
         df = pd.read_json(myFile)
-        df = convert_datetime_columns(df)
         
     elif uploadedFileType == "text/csv":
         print('Uploaded File Type:', uploadedFileType)
         df = pd.read_csv(myFile)
-        df = convert_datetime_columns(df)
-        # df['datetime'] = pd.to_datetime(df['datetime'])
         if isinstance(df, pd.DataFrame):
             print("Pandas DataFrame has been created.")
         else:
@@ -77,26 +74,12 @@ def upload():
     elif uploadedFileType == "application/octet-stream" and myFile.filename.endswith(".parquet"):
         print('Uploaded File Type:', uploadedFileType)
         df = pd.read_parquet(myFile)
-        df = convert_datetime_columns(df)
 
     return {
         "file": myFile.filename,
         "path": f"/{myFile.filename}",
         "ty": myFile.content_type
     }
-
-def convert_datetime_columns(df):
-    datetime_columns = df.select_dtypes(include=[object]).columns
-    global converted_columns
-    # print('datetime_columns:', datetime_columns)
-    for column in datetime_columns:
-        try:
-            df[column] = pd.to_datetime(df[column], format='%Y-%m-%d %H:%M:%S')
-            converted_columns.append(column)
-        except ValueError:
-            pass
-    print('datetime_columns:', converted_columns)
-    return df
 
 @app.route("/nullval", methods=["POST"])
 def countnul():
@@ -202,11 +185,64 @@ def load():
             'max': statistics['max']
             }
     print('sumstat:', sumstat)
+        
+    # Slice the first 10 rows and save it as '10_rows.json'
+    slicedData = df.head(5)
+    slicedDataFilePath = "./public/10_rows.json"
+    slicedData.to_json(slicedDataFilePath, orient="records")
+
+    end_time = time.time()
+    execution_time = end_time - start_time
+    print("Execution time:", execution_time, "seconds")
+
+    return "Data has been loaded"
+
+def formatFrame():
+    frame_rep = dict()
+    frame_rep["columns"] = [{
+        "Header": column,
+        "accessor": column
+    } for column in state["frame"].columns]
+    frame_rep["data"] = []
+    for _, row in state["frame"].iterrows():
+        formatted_row = {}
+        for column, value in row.items():
+            if isinstance(value, pd.Timestamp):
+                formatted_row[column] = value.strftime("%Y-%m-%d %H:%M:%S")
+            if isinstance(value, bool):
+                formatted_row[column] = str(value)
+            else:
+                formatted_row[column] = value
+        frame_rep["data"].append(formatted_row)
+    print("Frame formatted")
+    return frame_rep
+
+@app.route("/transformtable", methods=["POST"])
+def transform():
+    global df, filtered_df, grouped_monthly, grouped_yearly, grouped_daily, grouped_data, response
+    df = None
+    df = filtered_df
+    state = {}
+    state = {
+        "frame": None
+    }
+    frame_rep = {} 
+    response = {}
+    grouped_data = {}
+
+    start_time = time.time()
+
+    for column in df.columns:
+        grouped_data[column] = df.groupby(column)
+
+    state["frame"] = df.head(100)
+    frame_rep = formatFrame()
+    response = jsonify(frame_rep)
 
     grouped_monthly = group_by_monthly()
     grouped_yearly = group_by_yearly()
     grouped_daily = group_by_daily()
-        
+
     # Slice the first 10 rows and save it as '10_rows.json'
     slicedData = df.head(5)
     slicedDataFilePath = "./public/10_rows.json"
@@ -260,7 +296,7 @@ def formatFrame():
         for column, value in row.items():
             if isinstance(value, pd.Timestamp):
                 formatted_row[column] = value.strftime("%Y-%m-%d %H:%M:%S")
-            elif isinstance(value, bool):
+            if isinstance(value, bool):
                 formatted_row[column] = str(value)
             else:
                 formatted_row[column] = value
@@ -491,6 +527,23 @@ def equation():
     components = eq.split()
     print('equation:', components)
 
+    if len(components) >= 3 and components[:2] == ['fmt', '=']:
+        fmt = ' '.join(components[2:])
+        print('fmt:', fmt)
+        filtered_df = convert_datetime_columns(filtered_df, fmt)
+        response = {
+            "columns": [
+                {
+                    "Header": column,
+                    "accessor": column
+                }
+                for column in filtered_df.columns
+            ],
+            "data": format_dataframe(filtered_df.head(100))
+        }
+
+        return jsonify(response)
+
     # Extract the new column name
     new_column_name = components[0][1:-1]
     print('new column:', new_column_name)
@@ -561,6 +614,22 @@ def format_dataframe(df):
                 formatted_row[column] = value
         formatted_data.append(formatted_row)
     return formatted_data
+
+def convert_datetime_columns(df, fmt):
+    datetime_columns = df.select_dtypes(include=[object]).columns
+    global converted_columns
+    print('datetime_columns:', datetime_columns)
+    # print('format:', fmt)
+    for column in datetime_columns:
+        try:
+            df[column] = pd.to_datetime(df[column], format=fmt)
+            print('format:', fmt)
+            converted_columns.append(column)
+            print('converted_columns:', converted_columns)
+        except ValueError:
+            pass
+    print('converted_columns:', converted_columns)
+    return df
 
 @app.route("/chartData", methods=["POST"])
 def createTable():
