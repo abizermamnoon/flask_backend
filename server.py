@@ -46,9 +46,11 @@ pie_groupedData = None
 box_groupedData = None
 groupedData = {}
 sumstat = {}
+heat_groupedData = None
 
 @app.route("/upload", methods=["POST"])
 def upload():
+    start_time = time.time()
     if "file" not in request.files:
         return {"msg": "file is not found"}, 500
 
@@ -74,6 +76,10 @@ def upload():
     elif uploadedFileType == "application/octet-stream" and myFile.filename.endswith(".parquet"):
         print('Uploaded File Type:', uploadedFileType)
         df = pd.read_parquet(myFile)
+    
+    end_time = time.time()
+    execution_time = end_time - start_time
+    print("Execution time:", execution_time, "seconds")
 
     return {
         "file": myFile.filename,
@@ -347,7 +353,7 @@ def map_dtype_name(dtype):
 @app.route("/sortData", methods=["POST"])
 def sort_data():
     start_time = time.time()
-    global df, grouped_monthly, grouped_daily, grouped_yearly, grouped_data, converted_columns, xAxisParam, yAxisParams, xAxisParam_1, yAxisParams_1, type_1, type, box_groupedData, sumstat
+    global df, grouped_monthly, grouped_daily, grouped_yearly, grouped_data, converted_columns, xAxisParam, yAxisParams, xAxisParam_1, yAxisParams_1, type_1, type, box_groupedData, sumstat, heat_groupedData
     min_yAxisData = 0
     max_yAxisData = 0
     if df is not None:
@@ -431,7 +437,7 @@ def sort_data():
         return sortedData, 200
     
     else:
-        groupedData = pd.DataFrame(columns=[xAxisParam] + yAxisParams)
+        heat_groupedData = pd.DataFrame(columns=[xAxisParam] + yAxisParams)
         if interval == "daily":
             grouped = grouped_daily[xAxisParam]
         elif interval == "monthly":
@@ -445,45 +451,44 @@ def sort_data():
             first_values = group.head(1)
             if not first_values.empty:
                 values_dict = {yAxisParam: first_values.iloc[0][yAxisParam] if yAxisParam in first_values.columns else None for yAxisParam in yAxisParams}
-                groupedData = groupedData.append({xAxisParam: groupKey, **values_dict}, ignore_index=True)
+                heat_groupedData = heat_groupedData.append({xAxisParam: groupKey, **values_dict}, ignore_index=True)
 
-        groupedData[xAxisParam] = pd.to_datetime(groupedData[xAxisParam])
+        heat_groupedData[xAxisParam] = pd.to_datetime(heat_groupedData[xAxisParam])
 
         if interval == 'monthly':
-            groupedData['month'] = groupedData[xAxisParam].dt.month
-            groupedData[xAxisParam] = groupedData[xAxisParam].dt.year
-            groupedData['datetime_uniqueness'] = groupedData[xAxisParam].factorize()[0]
-            groupedData['month_uniqueness'] = groupedData['month'].factorize()[0]
-            groupedData['index_array'] = groupedData.apply(lambda row: [row['datetime_uniqueness'], row['month_uniqueness'], row[yAxisParams[0]]], axis=1)
-            min_yAxisData = groupedData[yAxisParams[0]].min()
-            max_yAxisData = groupedData[yAxisParams[0]].max()
-            groupedData = groupedData.drop([yAxisParams[0], 'datetime_uniqueness', 'month_uniqueness'], axis=1)
+            heat_groupedData['month'] = heat_groupedData[xAxisParam].dt.month
+            heat_groupedData[xAxisParam] = heat_groupedData[xAxisParam].dt.year
+            heat_groupedData['datetime_uniqueness'] = heat_groupedData[xAxisParam].factorize()[0]
+            heat_groupedData['month_uniqueness'] = heat_groupedData['month'].factorize()[0]
+            heat_groupedData['index_array'] = heat_groupedData.apply(lambda row: [row['datetime_uniqueness'], row['month_uniqueness'], row[yAxisParams[0]]], axis=1)
+            min_yAxisData = heat_groupedData[yAxisParams[0]].min()
+            max_yAxisData = heat_groupedData[yAxisParams[0]].max()
+            heat_groupedData = heat_groupedData.drop(['datetime_uniqueness', 'month_uniqueness'], axis=1)
         elif interval == 'daily':  
-            groupedData['day'] = groupedData[xAxisParam].dt.strftime('%d')
-            groupedData[xAxisParam] = groupedData[xAxisParam].dt.strftime('%Y-%m')
-            groupedData['datetime_uniqueness'] = groupedData[xAxisParam].factorize()[0]
-            groupedData['day_uniqueness'] = groupedData['day'].factorize()[0]
-            groupedData['index_array'] = groupedData.apply(lambda row: [row['datetime_uniqueness'], row['day_uniqueness'], row[yAxisParams[0]]], axis=1)
-            min_yAxisData = groupedData[yAxisParams[0]].min()
-            max_yAxisData = groupedData[yAxisParams[0]].max()
-            groupedData = groupedData.drop([yAxisParams[0], 'datetime_uniqueness', 'day_uniqueness'], axis=1)
+            heat_groupedData['day'] = heat_groupedData[xAxisParam].dt.strftime('%d')
+            heat_groupedData[xAxisParam] = heat_groupedData[xAxisParam].dt.strftime('%Y-%m')
+            heat_groupedData['datetime_uniqueness'] = heat_groupedData[xAxisParam].factorize()[0]
+            heat_groupedData['day_uniqueness'] = heat_groupedData['day'].factorize()[0]
+            heat_groupedData['index_array'] = heat_groupedData.apply(lambda row: [row['datetime_uniqueness'], row['day_uniqueness'], row[yAxisParams[0]]], axis=1)
+            min_yAxisData = heat_groupedData[yAxisParams[0]].min()
+            max_yAxisData = heat_groupedData[yAxisParams[0]].max()
+            heat_groupedData = heat_groupedData.drop(['datetime_uniqueness', 'day_uniqueness'], axis=1)
 
         # Calculate min and max values of the yAxisData
-        
-
-        print('groupedData:', groupedData)
+        print('heat_groupedData:', heat_groupedData)
         print('min:', min_yAxisData)
         print('max:', max_yAxisData)
 
-        second_column = groupedData.columns[1]
+        second_column = heat_groupedData.columns[2]
 
          # Create the sortedData dictionary as per the desired format
         sortedData = {
-            "xAxisData": groupedData[xAxisParam].unique().tolist(),
-            "yAxisData": groupedData[second_column].unique().tolist(),
-            "data": groupedData['index_array'].tolist(),
+            "xAxisData": heat_groupedData[xAxisParam].unique().tolist(),
+            "yAxisData": heat_groupedData[second_column].unique().tolist(),
+            "data": heat_groupedData['index_array'].tolist(),
             "min": min_yAxisData,
-            "max": max_yAxisData
+            "max": max_yAxisData,
+            "yParam": heat_groupedData[yAxisParams[0]].tolist(),
         }
 
         # Convert the sortedData dictionary to JSON format
@@ -493,9 +498,6 @@ def sort_data():
 
         return sortedData_json, 200
         
-
-
-
 @app.route('/create', methods=["POST"])
 def createFrame():
     global response
@@ -702,11 +704,12 @@ def createTable():
     return jsonify(formattedData)
 
 def format_frame():
-    global groupedData, pie_groupedData, state_1
+    global groupedData, pie_groupedData, state_1, heat_groupedData
     data = request.json
     xAxisParam_1 = data['xAxisParam']
     yAxisParams_1 = data['yAxisParams']
     type_1 = data['type']
+    interval_1 = data['interval']
     grouped_data = pd.DataFrame()
     print('Chart Type1:', type_1)
     print('Data Received:', data)
@@ -737,12 +740,25 @@ def format_frame():
             print('grouped_data:', grouped_data)
         
     elif len(xAxisParam_1) > 0:
-        headers.append(xAxisParam_1)
-        for yAxisParm in yAxisParams_1:
-            if yAxisParm:
-                headers.append(yAxisParm)
-        grouped_data = pd.DataFrame.from_dict(groupedData, orient='index').reset_index()
-        grouped_data.columns = headers
+        if heat_groupedData is None:
+            headers.append(xAxisParam_1)
+            for yAxisParm in yAxisParams_1:
+                if yAxisParm:
+                    headers.append(yAxisParm)
+            grouped_data = pd.DataFrame.from_dict(groupedData, orient='index').reset_index()
+            grouped_data.columns = headers
+        else:
+            if 'index_array' in heat_groupedData.columns:
+                heat_groupedData = heat_groupedData.drop(['index_array'], axis=1)
+            headers.append(xAxisParam_1)
+            for yAxisParm in yAxisParams_1:
+                if yAxisParm:
+                    headers.append(yAxisParm)
+            if interval_1 == 'monthly':
+                headers.append('month')
+            if interval_1 == 'daily':
+                headers.append('day')
+            
 
     frame_rep_1 = dict()
     frame_rep_1["columns"] = [{
@@ -773,8 +789,17 @@ def format_frame():
                     frame_rep_1["data"].append(formatted_row)
             
     elif len(xAxisParam) > 0 and type_1 != 'boxplot':
-        if grouped_data is not None:
+        if heat_groupedData is None:
             state_1["frame"] = grouped_data.head(200)
+            print('state_1:', state_1["frame"])
+            for _, row in state_1["frame"].iterrows():
+                formatted_row = {}
+                for column, value in row.items():               
+                    formatted_row[column] = value
+                frame_rep_1["data"].append(formatted_row)
+        if heat_groupedData is not None:
+            state_1["frame"] = heat_groupedData.head(200)
+            heat_groupedData = None
             print('state_1:', state_1["frame"])
             for _, row in state_1["frame"].iterrows():
                 formatted_row = {}
