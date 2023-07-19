@@ -12,12 +12,21 @@ import time
 import numpy as np
 import copy
 import pandas as pd
+from itertools import chain
+
 app = Flask(__name__)
 CORS(app)
 
 uploadedFileName = None
 uploadedFileType = None
 df = None
+df_0 = None
+df_1 = None
+df_2 = None
+df_3 = None
+df_4 = None
+df_list1 = []
+cols = []
 filtered_df = None
 state = {}
 state = {
@@ -51,41 +60,114 @@ heat_groupedData = None
 @app.route("/upload", methods=["POST"])
 def upload():
     start_time = time.time()
-    if "file" not in request.files:
-        return {"msg": "file is not found"}, 500
 
-    myFile = request.files["file"]
+    global df, df_0, df_1, df_2, df_3, df_4, cols
+    
+    files_dict = request.files.to_dict(flat=False)
+    print('files_dict:', files_dict)
 
-    global uploadedFileName, uploadedFileType, df, grouped_monthly, grouped_yearly, grouped_daily, state, frame_rep, response, grouped_data, data_types
+    if 'file_0' in files_dict:
+        file_0 = request.files['file_0']
+        df_0 = pd.read_csv(file_0)
 
-    uploadedFileName = myFile.filename
-    uploadedFileType = myFile.content_type
+    if 'file_1' in files_dict:
+        file_1 = request.files['file_1']
+        df_1 = pd.read_csv(file_1)
 
-    if uploadedFileType == "application/json":
-        print('Uploaded File Type:', uploadedFileType)
-        df = pd.read_json(myFile)
-        
-    elif uploadedFileType == "text/csv":
-        print('Uploaded File Type:', uploadedFileType)
-        df = pd.read_csv(myFile)
-        if isinstance(df, pd.DataFrame):
-            print("Pandas DataFrame has been created.")
-        else:
-            print("Error: Failed to create Pandas DataFrame from CSV.")
-        
-    elif uploadedFileType == "application/octet-stream" and myFile.filename.endswith(".parquet"):
-        print('Uploaded File Type:', uploadedFileType)
-        df = pd.read_parquet(myFile)
+    if 'file_2' in files_dict:
+        file_2 = request.files['file_2']
+        df_2 = pd.read_csv(file_2)
+
+    if 'file_3' in files_dict:
+        file_3 = request.files['file_3']
+        df_3 = pd.read_csv(file_3)
+
+    if 'file_4' in files_dict:
+        file_4 = request.files['file_4']
+        df_4 = pd.read_csv(file_4)
+    
+    uploaded_files_info = []
+
+    for key, file_list in files_dict.items():
+        if file_list:  # Check if the file list is not empty
+            uploaded_file_name = file_list[0].filename
+            uploaded_file_type = file_list[0].content_type
+
+            file_info = {
+                "file": uploaded_file_name,
+                "path": f"/{uploaded_file_name}",
+                "type": uploaded_file_type,
+            }
+
+            uploaded_files_info.append(file_info)
+
+            print(uploaded_files_info)
     
     end_time = time.time()
     execution_time = end_time - start_time
     print("Execution time:", execution_time, "seconds")
 
-    return {
-        "file": myFile.filename,
-        "path": f"/{myFile.filename}",
-        "ty": myFile.content_type
-    }
+    return {"files": uploaded_files_info, "cols": cols}
+
+@app.route("/jointable", methods=["POST"])
+def join():
+    data = request.json
+    print('Received Data:', data)
+    join = data['joinType']
+    primary_key = data['primaryKey']
+    
+    global df_list1
+    df_list = [df_0, df_1, df_2, df_3, df_4 ]
+    
+    for li in df_list:
+        if li is not None:
+            df_list1.append(li)
+    print('df_list:', len(df_list1))
+    if join == 'inner':
+        inner(primary_key)
+        return 'Dataframes have been inner joined'
+    elif join == 'left':
+        left(primary_key)
+        return 'Dataframes have been left joined'
+    else:
+        right(primary_key)
+        return 'Dataframes have been right joined'
+
+def inner(primary_key):
+    global df, df_0, df_1, df_2, df_3, df_4, df_list1
+    if len(df_list1) == 2:
+        repeating_columns = [col for col in df_0.columns if col in df_1.columns and col != primary_key]
+        df_1 = df_1.drop(columns=repeating_columns)
+        df = pd.merge(df_0, df_1, on=primary_key, how='inner')
+    if len(df_list1) == 3:
+        repeating_columns = [col for col in df_0.columns if col in df_1.columns and col != primary_key]
+        df_1 = df_1.drop(columns=repeating_columns)
+        
+        df = pd.merge(df_0, df_1, on=primary_key, how='inner')
+    
+def left(primary_key):
+    global df, df_0, df_1, df_2, df_3, df_4, df_list1
+    if len(df_list1) == 2:
+        repeating_columns = [col for col in df_0.columns if col in df_1.columns and col != primary_key]
+        print('df_0 columns:', df_0.columns)
+        print('repeating columns:', repeating_columns)
+        df_1 = df_1.drop(columns=repeating_columns)
+        print('df_1 columns:', df_1.columns)
+        df = pd.merge(df_0, df_1, on=primary_key, how='left')
+        print('df columns:', df.columns)
+    
+
+def right(primary_key):
+    global df, df_0, df_1, df_2, df_3, df_4, df_list1
+    if len(df_list1) == 2:
+        repeating_columns = [col for col in df_0.columns if col in df_1.columns and col != primary_key]
+        print('df_0 columns:', df_0.columns)
+        print('repeating columns:', repeating_columns)
+        df_1 = df_1.drop(columns=repeating_columns)
+        print('df_1 columns:', df_1.columns)
+        df = pd.merge(df_0, df_1, on=primary_key, how='right')
+        print('df columns:', df.columns)
+    
 
 @app.route("/nullval", methods=["POST"])
 def countnul():
@@ -312,9 +394,6 @@ def formatFrame():
 
 @app.route("/")
 def index():
-    
-    if not uploadedFileName:
-        return {"msg": "No file has been uploaded"}, 400
 
     filePath = "./public/10_rows.json"  # Change this to dynamic file path if needed
     headers = {}
