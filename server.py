@@ -25,6 +25,10 @@ df_1 = None
 df_2 = None
 df_3 = None
 df_4 = None
+df_5 = None
+df_6 = None 
+df_7 = None
+nondf_list = []
 df_list1 = []
 cols = []
 filtered_df = None
@@ -56,35 +60,26 @@ box_groupedData = None
 groupedData = {}
 sumstat = {}
 heat_groupedData = None
+defdf_list = []
 
 @app.route("/upload", methods=["POST"])
 def upload():
     start_time = time.time()
 
-    global df, df_0, df_1, df_2, df_3, df_4, cols
+    global df, df_0, df_1, df_2, df_3, df_4, cols, df_5, df_6, df_7, nondf_list, defdf_list
+
+    nondf_list = [df_0, df_1, df_2, df_3, df_4, df_5, df_6, df_7]
+    df = None
     
     files_dict = request.files.to_dict(flat=False)
-    print('files_dict:', files_dict)
+    files_list = list(files_dict.keys())
+    print('list of files:', files_list)
 
-    if 'file_0' in files_dict:
-        file_0 = request.files['file_0']
-        df_0 = pd.read_csv(file_0)
+    for index, item in enumerate(files_list):
+        nondf_list[index] = pd.read_csv(request.files[item])
 
-    if 'file_1' in files_dict:
-        file_1 = request.files['file_1']
-        df_1 = pd.read_csv(file_1)
-
-    if 'file_2' in files_dict:
-        file_2 = request.files['file_2']
-        df_2 = pd.read_csv(file_2)
-
-    if 'file_3' in files_dict:
-        file_3 = request.files['file_3']
-        df_3 = pd.read_csv(file_3)
-
-    if 'file_4' in files_dict:
-        file_4 = request.files['file_4']
-        df_4 = pd.read_csv(file_4)
+    defdf_list = [item for item in nondf_list if item is not None]
+    print('defdf_list:', len(defdf_list))
     
     uploaded_files_info = []
 
@@ -107,7 +102,7 @@ def upload():
     execution_time = end_time - start_time
     print("Execution time:", execution_time, "seconds")
 
-    return {"files": uploaded_files_info, "cols": cols}
+    return {"files": uploaded_files_info}
 
 @app.route("/jointable", methods=["POST"])
 def join():
@@ -116,58 +111,43 @@ def join():
     join = data['joinType']
     primary_key = data['primaryKey']
     
-    global df_list1
-    df_list = [df_0, df_1, df_2, df_3, df_4 ]
+    global defdf_list, df
     
-    for li in df_list:
-        if li is not None:
-            df_list1.append(li)
-    print('df_list:', len(df_list1))
+    def perform_join(how):
+        global df
+        for index, item in enumerate(defdf_list):
+            if df is None:
+                df = defdf_list[index]
+            else:
+                df = pd.merge(df, defdf_list[index], on=primary_key, how=how)
+        print('columns in df before dropping duplicates:', df.columns)
+
+        # Drop duplicate columns
+        df = df.loc[:, ~df.columns.duplicated()]
+        print('columns in df after dropping duplicates:', df.columns)
+
+        return df.columns.tolist()
+
     if join == 'inner':
-        inner(primary_key)
-        return 'Dataframes have been inner joined'
-    elif join == 'left':
-        left(primary_key)
-        return 'Dataframes have been left joined'
-    else:
-        right(primary_key)
-        return 'Dataframes have been right joined'
-
-def inner(primary_key):
-    global df, df_0, df_1, df_2, df_3, df_4, df_list1
-    if len(df_list1) == 2:
-        repeating_columns = [col for col in df_0.columns if col in df_1.columns and col != primary_key]
-        df_1 = df_1.drop(columns=repeating_columns)
-        df = pd.merge(df_0, df_1, on=primary_key, how='inner')
-    if len(df_list1) == 3:
-        repeating_columns = [col for col in df_0.columns if col in df_1.columns and col != primary_key]
-        df_1 = df_1.drop(columns=repeating_columns)
-        
-        df = pd.merge(df_0, df_1, on=primary_key, how='inner')
+        return perform_join('inner')
+    if join == 'left':
+        return perform_join('left')
+    if join == 'right':
+        return perform_join('right')
     
-def left(primary_key):
-    global df, df_0, df_1, df_2, df_3, df_4, df_list1
-    if len(df_list1) == 2:
-        repeating_columns = [col for col in df_0.columns if col in df_1.columns and col != primary_key]
-        print('df_0 columns:', df_0.columns)
-        print('repeating columns:', repeating_columns)
-        df_1 = df_1.drop(columns=repeating_columns)
-        print('df_1 columns:', df_1.columns)
-        df = pd.merge(df_0, df_1, on=primary_key, how='left')
-        print('df columns:', df.columns)
-    
-
-def right(primary_key):
-    global df, df_0, df_1, df_2, df_3, df_4, df_list1
-    if len(df_list1) == 2:
-        repeating_columns = [col for col in df_0.columns if col in df_1.columns and col != primary_key]
-        print('df_0 columns:', df_0.columns)
-        print('repeating columns:', repeating_columns)
-        df_1 = df_1.drop(columns=repeating_columns)
-        print('df_1 columns:', df_1.columns)
-        df = pd.merge(df_0, df_1, on=primary_key, how='right')
-        print('df columns:', df.columns)
-    
+@app.route("/dropcol", methods=["POST"])
+def dropcol():
+    global df
+    data = request.json
+    print('Received Data:', data)
+    yAxisParams = []
+    for yAxisParm in data['yAxisParams']:
+        if yAxisParm:
+            yAxisParams.append(yAxisParm)
+    print('yAxisParams:', yAxisParams)
+    df = df.drop(columns=yAxisParams, axis=1 )
+    print('df columns:', df.columns)
+    return 'working'
 
 @app.route("/nullval", methods=["POST"])
 def countnul():
