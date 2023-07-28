@@ -1,13 +1,10 @@
 from flask import Flask, request, send_file, make_response, Response, jsonify
 from flask_cors import CORS
 from io import StringIO
-import pyarrow as pa
-import zlib
 import json
 import os
 import datetime
 import csv
-# import pandas as pd
 import time
 import numpy as np
 import copy
@@ -58,51 +55,99 @@ type_1 = None
 pie_groupedData = None
 box_groupedData = None
 groupedData = {}
+grouped = None
 sumstat = {}
 heat_groupedData = None
 defdf_list = []
+dtypes_dict = {}
+uploaded_files_info = []
 
 @app.route("/upload", methods=["POST"])
 def upload():
     start_time = time.time()
 
-    global df, df_0, df_1, df_2, df_3, df_4, cols, df_5, df_6, df_7, nondf_list, defdf_list
+    global df, df_0, df_1, df_2, df_3, df_4, cols, df_5, df_6, df_7, nondf_list, defdf_list, uploaded_files_info
 
     nondf_list = [df_0, df_1, df_2, df_3, df_4, df_5, df_6, df_7]
-    df = None
     
     files_dict = request.files.to_dict(flat=False)
     files_list = list(files_dict.keys())
-    print('list of files:', files_list)
+    # print('list of files:', files_list)
 
     for index, item in enumerate(files_list):
         nondf_list[index] = pd.read_csv(request.files[item])
-
+        
     defdf_list = [item for item in nondf_list if item is not None]
-    print('defdf_list:', len(defdf_list))
-    
-    uploaded_files_info = []
+    # print('defdf_list:', len(defdf_list))
 
     for key, file_list in files_dict.items():
         if file_list:  # Check if the file list is not empty
             uploaded_file_name = file_list[0].filename
             uploaded_file_type = file_list[0].content_type
 
+            file_name_without_extension = os.path.splitext(uploaded_file_name)[0]
+
             file_info = {
-                "file": uploaded_file_name,
+                "file": file_name_without_extension,
                 "path": f"/{uploaded_file_name}",
                 "type": uploaded_file_type,
             }
 
             uploaded_files_info.append(file_info)
-
-            print(uploaded_files_info)
+            
+    if len(defdf_list) == 1:
+        df = defdf_list[0]
     
     end_time = time.time()
     execution_time = end_time - start_time
     print("Execution time:", execution_time, "seconds")
 
     return {"files": uploaded_files_info}
+
+@app.route('/findtable', methods=["POST"])
+def findtab():
+    data = request.json
+    print('Received Data:', data)
+    global defdf_list
+    print('length of df list:', len(defdf_list))
+    selectedtab = data['selectedFiles']
+    print('selectedtab:', selectedtab)
+    formattedData = format_Frame(defdf_list[selectedtab])
+    return jsonify(formattedData)
+
+def format_Frame(df):
+    state = {}
+    state = {
+        "frame": None
+    }
+    headers = df.columns
+
+    frame_rep = dict()
+    frame_rep["columns"] = [{
+        "Header": column,
+        "accessor": column
+    } for column in headers]
+    frame_rep["data"] = []
+
+    state["frame"] = df.head(10)
+    # print('frame_rep:', frame_rep)
+    frame_rep["data"] = []
+    for _, row in state["frame"].iterrows():
+        formatted_row = {}
+        for column, value in row.items():
+            if isinstance(value, pd.Timestamp):
+                formatted_row[column] = value.strftime("%Y-%m-%d %H:%M:%S")
+            elif isinstance(value, bool):
+                formatted_row[column] = str(value)
+            elif pd.isna(value):  # Check for NaN values
+                formatted_row[column] = "N/A"
+            else:
+                formatted_row[column] = value
+        frame_rep["data"].append(formatted_row)
+    
+    # print('frame_rep:', frame_rep)
+    return frame_rep
+
 
 @app.route("/jointable", methods=["POST"])
 def join():
@@ -111,20 +156,44 @@ def join():
     join = data['joinType']
     primary_key = data['primaryKey']
     
-    global defdf_list, df
-    
     def perform_join(how):
-        global df
+        global df, defdf_list, df, nondf_list, uploaded_files_info
+        colnam = [] 
+        df = None
         for index, item in enumerate(defdf_list):
-            if df is None:
-                df = defdf_list[index]
-            else:
-                df = pd.merge(df, defdf_list[index], on=primary_key, how=how)
+            file_name_without_extension = uploaded_files_info[index]["file"]
+            if defdf_list[index] is not None:  # Skip if DataFrame is None
+                temp_df = defdf_list[index].copy() 
+                for col in temp_df.columns:
+                    if df is not None:
+                        if col != primary_key:
+                            col_with_prefix = f"{file_name_without_extension}_{col}"
+                            colnam.append(col_with_prefix)
+                    else:
+                        col_with_prefix = f"{file_name_without_extension}_{col}"
+                        colnam.append(col_with_prefix)
+                if df is None:
+                    df = temp_df
+                else:
+
+                    df = pd.merge(df, temp_df, on=primary_key, how=how)
+        print('colnam:', colnam)
+        print('number of columns:', len(colnam))
+        df.columns = colnam
+    
         print('columns in df before dropping duplicates:', df.columns)
+        print('number of columns in dataframe:', len(df.columns))
 
         # Drop duplicate columns
-        df = df.loc[:, ~df.columns.duplicated()]
-        print('columns in df after dropping duplicates:', df.columns)
+        # df = df.loc[:, ~df.columns.duplicated()]
+        # print('columns in df after dropping duplicates:', df.columns)
+
+        for index, item in enumerate(nondf_list):
+            if item is None:
+                nondf_list[index] = df
+                break
+        defdf_list = [item for item in nondf_list if item is not None]
+        print('Number of dataframes:', len(defdf_list))
 
         return df.columns.tolist()
 
@@ -137,27 +206,40 @@ def join():
     
 @app.route("/dropcol", methods=["POST"])
 def dropcol():
-    global df
+    global df, defdf_list
     data = request.json
     print('Received Data:', data)
+    selectedTab = data['selectedFiles']
     yAxisParams = []
     for yAxisParm in data['yAxisParams']:
         if yAxisParm:
             yAxisParams.append(yAxisParm)
     print('yAxisParams:', yAxisParams)
-    df = df.drop(columns=yAxisParams, axis=1 )
-    print('df columns:', df.columns)
+    defdf_list[selectedTab] = defdf_list[selectedTab].drop(columns=yAxisParams, axis=1 )
+    print('df columns:', defdf_list[selectedTab].columns)
     return 'working'
 
 @app.route("/nullval", methods=["POST"])
 def countnul():
-    global df
+    global df, defdf_list
+    print('length of df list:', len(defdf_list))
+
+    data = request.json
+    print('Received Data:', data)
+    selectedtab = None
+    if data['selectedFiles'] is not None:
+        selectedtab = data['selectedFiles']
+    
+    if selectedtab is not None:
+        print('selectedtab:', selectedtab)
+        df = defdf_list[selectedtab]
+
     if df is not None:
         df_nul = df.isnull().sum()
         df_nul = df_nul.to_frame(name='count_nuls').reset_index()
         df_nul.columns = ['columns', 'count_nuls']
         df_nul = df_nul[df_nul['count_nuls'] > 0]
-        print('df_nul:', df_nul)
+        # print('df_nul:', df_nul)
         formattedData = format_isnul(df_nul)
         return jsonify(formattedData)
     else:
@@ -178,14 +260,14 @@ def format_isnul(df):
     frame_rep["data"] = []
 
     state["frame"] = df
-    print('state:', state["frame"])
+    # print('state:', state["frame"])
     for _, row in state["frame"].iterrows():
         formatted_row = {}
         for column, value in row.items():               
             formatted_row[column] = value
         frame_rep["data"].append(formatted_row)
     
-    print('frame_rep:', frame_rep)
+    # print('frame_rep:', frame_rep)
 
     return frame_rep
 
@@ -193,42 +275,51 @@ def format_isnul(df):
 def findna():
     data = request.json
     action = data['action']
+
     print('Requested Data:', data)
+    selectedTab = data['selectedFiles']
 
     if action == 'drop':
-        dropna()
+        dropna(selectedTab)
         return "Rows with NA values have been dropped"
     if action == 'next':
-        nextna()
+        nextna(selectedTab)
         return "cells with NA values have been replaced by rows below it"
     if action == 'prev':
-        prevna()
+        prevna(selectedTab)
         return "cells with NA values have been replaced by rows above it"
     if action == 'interp':
-        interpna()
+        interpna(selectedTab)
         return "cells with NA values have been replaced by linear interpolation"
     
-def dropna():
-    global df
-    df = df.dropna()
+def dropna(selectedTab):
+    global df, defdf_list
 
-def nextna():
-    global df
-    df = df.fillna(method ='bfill')
+    defdf_list[selectedTab] = defdf_list[selectedTab].dropna()
 
-def prevna():
-    global df
-    df = df.fillna(method ='pad')
+def nextna(selectedTab):
+    global df, defdf_list
+    defdf_list[selectedTab] = defdf_list[selectedTab].fillna(method ='bfill')
 
-def interpna():
-    global df
-    df = df.interpolate(method ='linear', limit_direction ='forward')
+def prevna(selectedTab):
+    global df, defdf_list
+    defdf_list[selectedTab] = defdf_list[selectedTab].fillna(method ='pad')
+
+def interpna(selectedTab):
+    global df, defdf_list
+    defdf_list[selectedTab] = defdf_list[selectedTab].interpolate(method ='linear', limit_direction ='forward')
 
 
 @app.route("/loadTable", methods=["POST"])
 def load():
 
-    global df, grouped_monthly, grouped_yearly, grouped_daily, state, frame_rep, response, grouped_data, data_types, sumstat
+    global df, grouped_monthly, grouped_yearly, grouped_daily, state, frame_rep, response, grouped_data, data_types, sumstat, defdf_list
+
+    data = request.json
+    print('Received data:', data)
+    selectedTab = data['selectedFiles']
+
+    df = defdf_list[selectedTab]
 
     start_time = time.time()
 
@@ -240,6 +331,7 @@ def load():
     
     for column in df.columns:
         grouped_data[column] = df.groupby(column)
+        grouped_data[column + "_group_length"] = len(grouped_data[column])
     
     for column in df.columns:
         print('column type:', df[column].dtype)
@@ -302,6 +394,7 @@ def transform():
 
     for column in df.columns:
         grouped_data[column] = df.groupby(column)
+        grouped_data[column + "_group_length"] = len(grouped_data[column])
 
     state["frame"] = df.head(100)
     frame_rep = formatFrame()
@@ -328,6 +421,7 @@ def group_by_monthly():
         grouped_monthly_data = {}
         for column in converted_columns:
             grouped_monthly_data[column] = df.groupby(df[column].dt.strftime('%Y-%m'))
+            grouped_monthly_data[column + "_group_length"] = len(grouped_monthly_data[column])
         return grouped_monthly_data
     else:
         return None
@@ -338,6 +432,7 @@ def group_by_yearly():
         grouped_yearly_data = {}
         for column in converted_columns:
             grouped_yearly_data[column] = df.groupby(df[column].dt.strftime('%Y'))
+            grouped_yearly_data[column + "_group_length"] = len(grouped_yearly_data[column])
         return grouped_yearly_data
     else:
         return None
@@ -348,6 +443,7 @@ def group_by_daily():
         grouped_daily_data = {}
         for column in converted_columns:
             grouped_daily_data[column] = df.groupby(df[column].dt.strftime('%Y-%m-%d'))
+            grouped_daily_data[column + "_group_length"] = len(grouped_daily_data[column])
         return grouped_daily_data
     else:
         return None
@@ -388,7 +484,7 @@ def index():
 
 @app.route("/coltype", methods=["POST"])
 def findColType():
-    global df
+    global df, dtypes_dict
     if df is not None:
         dtypes_dict = df.dtypes.apply(lambda x: map_dtype_name(x)).to_dict()
         return jsonify(dtypes_dict)
@@ -412,11 +508,10 @@ def map_dtype_name(dtype):
 @app.route("/sortData", methods=["POST"])
 def sort_data():
     start_time = time.time()
-    global df, grouped_monthly, grouped_daily, grouped_yearly, grouped_data, converted_columns, xAxisParam, yAxisParams, xAxisParam_1, yAxisParams_1, type_1, type, box_groupedData, sumstat, heat_groupedData
+    global df, grouped_monthly, grouped_daily, grouped_yearly, grouped_data, converted_columns, xAxisParam, yAxisParams, xAxisParam_1, yAxisParams_1, type_1, type, box_groupedData, sumstat, heat_groupedData, dtypes_dict, grouped
     min_yAxisData = 0
     max_yAxisData = 0
-    if df is not None:
-        print('Streamed Data Length in Sort:', len(df))
+    print('dtypes_dict:', dtypes_dict)
 
     data = request.json
 
@@ -445,7 +540,6 @@ def sort_data():
     if len(xAxisParam) == 0 and type != 'boxplot':
         pie_groupedData = df.groupby(yAxisParams[0]).size().reset_index(name='count')
         pie_groupedData = pie_groupedData.sort_values('count', ascending=False)
-        print('pie_groupedData:', pie_groupedData)
         sortedData = {
             "xAxisData": [''.join(map(str, group)) for group in pie_groupedData[yAxisParams].values],
             "yAxisData": pie_groupedData['count'].values.tolist()
@@ -461,30 +555,81 @@ def sort_data():
             grouped = sumstat[param]
             valuesArray = list(grouped.values())
             result.append(valuesArray)
-        print('result:', result)
         return result 
     elif type != 'heatmap' and len(xAxisParam) > 0:
         
         if xAxisParam not in converted_columns:
            groupedData = {}
+           counter = 0
            grouped = grouped_data[xAxisParam]
-            
+           num_groups = grouped_data[xAxisParam + "_group_length"]
+           print('length of grouped:', num_groups)
+
+           for groupKey, group in grouped:
+                if num_groups > 100000:
+                    if counter % 1000 == 0:  # Check if the counter is a multiple of 100
+                        first_values = group.head(1)
+                        for _, entry in first_values.iterrows():
+                            groupedData[groupKey] = {yAxisParam: entry[yAxisParam] if yAxisParam in entry else None for yAxisParam in yAxisParams}
+                    counter += 1
+                elif num_groups > 10000:
+                    if counter % 100 == 0:  # Check if the counter is a multiple of 100
+                        first_values = group.head(1)
+                        for _, entry in first_values.iterrows():
+                            groupedData[groupKey] = {yAxisParam: entry[yAxisParam] if yAxisParam in entry else None for yAxisParam in yAxisParams}
+                    counter += 1
+                elif num_groups > 1000:
+                    if counter % 10 == 0:  # Check if the counter is a multiple of 100
+                        first_values = group.head(1)
+                        for _, entry in first_values.iterrows():
+                            groupedData[groupKey] = {yAxisParam: entry[yAxisParam] if yAxisParam in entry else None for yAxisParam in yAxisParams}
+                    counter += 1
+                else:
+                    first_values = group.head(1)
+                    for _, entry in first_values.iterrows():
+                        groupedData[groupKey] = {yAxisParam: entry[yAxisParam] if yAxisParam in entry else None for yAxisParam in yAxisParams}
+        
         else:
             groupedData = {}
+            counter = 0
             if interval == "daily":
-                grouped = grouped_daily[xAxisParam]                
+                grouped = grouped_daily[xAxisParam]
+                num_groups = grouped_daily[xAxisParam + "_group_length"]
+                print('length of grouped:', num_groups)              
             elif interval == "monthly":
-                grouped = grouped_monthly[xAxisParam]                
+                grouped = grouped_monthly[xAxisParam]  
+                num_groups = grouped_monthly[xAxisParam + "_group_length"]
+                print('length of grouped:', num_groups)            
             elif interval == "yearly":
-                grouped = grouped_yearly[xAxisParam]               
+                grouped = grouped_yearly[xAxisParam]  
+                num_groups = grouped_yearly[xAxisParam + "_group_length"]
+                print('length of grouped:', num_groups)           
             else:
                 return {"msg": "Invalid interval"}, 400
             
-        for groupKey, group in grouped:
-            first_values = group.head(1)
-            for _, entry in first_values.iterrows():
-                groupedData[groupKey] = {yAxisParam: entry[yAxisParam] if yAxisParam in entry else None for yAxisParam in yAxisParams}
-        print('grouped data:', groupedData)
+            for groupKey, group in grouped:
+                if num_groups > 100000:
+                    if counter % 1000 == 0:  # Check if the counter is a multiple of 100
+                        first_values = group.head(1)
+                        for _, entry in first_values.iterrows():
+                            groupedData[groupKey] = {yAxisParam: entry[yAxisParam] if yAxisParam in entry else None for yAxisParam in yAxisParams}
+                    counter += 1
+                elif num_groups > 10000:
+                    if counter % 100 == 0:  # Check if the counter is a multiple of 100
+                        first_values = group.head(1)
+                        for _, entry in first_values.iterrows():
+                            groupedData[groupKey] = {yAxisParam: entry[yAxisParam] if yAxisParam in entry else None for yAxisParam in yAxisParams}
+                    counter += 1
+                elif num_groups > 1000:
+                    if counter % 10 == 0:  # Check if the counter is a multiple of 100
+                        first_values = group.head(1)
+                        for _, entry in first_values.iterrows():
+                            groupedData[groupKey] = {yAxisParam: entry[yAxisParam] if yAxisParam in entry else None for yAxisParam in yAxisParams}
+                    counter += 1
+                else:
+                    first_values = group.head(1)
+                    for _, entry in first_values.iterrows():
+                        groupedData[groupKey] = {yAxisParam: entry[yAxisParam] if yAxisParam in entry else None for yAxisParam in yAxisParams}
             
         sortedData = {
             "xAxisData": sorted(groupedData.keys()),  # Sort the keys
@@ -506,11 +651,16 @@ def sort_data():
         else:
             return {"msg": "Invalid interval"}, 400
         
-        for groupKey, group in grouped:
-            first_values = group.head(1)
-            if not first_values.empty:
-                values_dict = {yAxisParam: first_values.iloc[0][yAxisParam] if yAxisParam in first_values.columns else None for yAxisParam in yAxisParams}
-                heat_groupedData = heat_groupedData.append({xAxisParam: groupKey, **values_dict}, ignore_index=True)
+        if dtypes_dict[yAxisParams[0]] == 'int':
+            for groupKey, group in grouped:
+                first_values = group.head(1)
+                if not first_values.empty:
+                    values_dict = {yAxisParam: first_values.iloc[0][yAxisParam] if yAxisParam in first_values.columns else None for yAxisParam in yAxisParams}
+                    heat_groupedData = heat_groupedData.append({xAxisParam: groupKey, **values_dict}, ignore_index=True)
+                # print('heat_groupedData:', heat_groupedData)
+        else:
+            print('error')
+            return
 
         heat_groupedData[xAxisParam] = pd.to_datetime(heat_groupedData[xAxisParam])
 
@@ -534,9 +684,9 @@ def sort_data():
             heat_groupedData = heat_groupedData.drop(['datetime_uniqueness', 'day_uniqueness'], axis=1)
 
         # Calculate min and max values of the yAxisData
-        print('heat_groupedData:', heat_groupedData)
-        print('min:', min_yAxisData)
-        print('max:', max_yAxisData)
+        # print('heat_groupedData:', heat_groupedData)
+        # print('min:', min_yAxisData)
+        # print('max:', max_yAxisData)
 
         second_column = heat_groupedData.columns[2]
 
@@ -553,7 +703,7 @@ def sort_data():
         # Convert the sortedData dictionary to JSON format
         sortedData_json = json.dumps(sortedData)
 
-        print('sorted data:', sortedData_json)
+        # print('sorted data:', sortedData_json)
 
         return sortedData_json, 200
         
@@ -643,10 +793,10 @@ def equation():
 
     if filtered_df is None:
         filtered_df = copy.deepcopy(df)
-        print('Length of dataframe:', len(filtered_df))
+        # print('Length of dataframe:', len(filtered_df))
     else:
         filtered_df = filtered_df
-        print('Length of dataframe:', len(filtered_df))
+        # print('Length of dataframe:', len(filtered_df))
 
     # Split the equation into individual components
     components = eq.split()
@@ -763,7 +913,7 @@ def createTable():
     return jsonify(formattedData)
 
 def format_frame():
-    global groupedData, pie_groupedData, state_1, heat_groupedData
+    global groupedData, pie_groupedData, state_1, heat_groupedData, grouped
     data = request.json
     xAxisParam_1 = data['xAxisParam']
     yAxisParams_1 = data['yAxisParams']
@@ -796,7 +946,7 @@ def format_frame():
                     grouped_data = grouped_data.append(column_data)
             grouped_data = grouped_data.transpose().reset_index()
             grouped_data.columns = headers   
-            print('grouped_data:', grouped_data)
+            # print('grouped_data:', grouped_data)
         
     elif len(xAxisParam_1) > 0:
         if heat_groupedData is None:
@@ -830,7 +980,7 @@ def format_frame():
         if np.object_ in dtype_list:
             if pie_groupedData is not None:
                 state_1["frame"] = pie_groupedData.head(200)
-                print('state_1:', state_1["frame"])
+                # print('state_1:', state_1["frame"])
                 for _, row in state_1["frame"].iterrows():
                     formatted_row = {}
                     for column, value in row.items():               
@@ -840,7 +990,7 @@ def format_frame():
             if grouped_data is not None:
                 print('type of frame')
                 state_1["frame"] = grouped_data
-                print('state_1:', state_1["frame"])
+                # print('state_1:', state_1["frame"])
                 for _, row in state_1["frame"].iterrows():
                     formatted_row = {}
                     for column, value in row.items():               
@@ -850,7 +1000,7 @@ def format_frame():
     elif len(xAxisParam) > 0 and type_1 != 'boxplot':
         if heat_groupedData is None:
             state_1["frame"] = grouped_data.head(200)
-            print('state_1:', state_1["frame"])
+            # print('state_1:', state_1["frame"])
             for _, row in state_1["frame"].iterrows():
                 formatted_row = {}
                 for column, value in row.items():               
@@ -859,13 +1009,13 @@ def format_frame():
         if heat_groupedData is not None:
             state_1["frame"] = heat_groupedData.head(200)
             heat_groupedData = None
-            print('state_1:', state_1["frame"])
+            # print('state_1:', state_1["frame"])
             for _, row in state_1["frame"].iterrows():
                 formatted_row = {}
                 for column, value in row.items():               
                     formatted_row[column] = value
                 frame_rep_1["data"].append(formatted_row)
-    print('frame_rep_1:', frame_rep_1)
+    # print('frame_rep_1:', frame_rep_1)
 
     return frame_rep_1
 
